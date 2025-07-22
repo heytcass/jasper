@@ -45,6 +45,10 @@
           ripgrep
           fd
           tree
+          
+          # Config processing for dev-mode
+          python3
+          jq
         ];
       in
       {

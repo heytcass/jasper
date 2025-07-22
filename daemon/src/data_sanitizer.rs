@@ -572,6 +572,7 @@ mod tests {
             event_type: Some("medical".to_string()),
             participants: Some("[]".to_string()),
             raw_data_json: Some("{}".to_string()),
+            is_all_day: Some(false),
         };
         
         let (title, _) = sanitizer.strict_sanitize(&event);

@@ -82,7 +82,30 @@ start_dev_mode() {
     # Remove existing files/symlinks and install development configs
     log "Installing development configs..."
     rm -f "$WAYBAR_CONFIG_DIR/config" "$WAYBAR_CONFIG_DIR/style.css"
-    cp "$DEV_CONFIG_DIR/config.json" "$WAYBAR_CONFIG_DIR/config"
+    
+    # Merge live configuration with Jasper module
+    if [ -f "$BACKUP_DIR/config.backup" ]; then
+        log "Merging live config with Jasper development module..."
+        # Use nix shell to access Python/jq for JSON processing
+        if command -v nix > /dev/null; then
+            cd "$SCRIPT_DIR"
+            nix develop --command python3 merge-waybar-config.py \
+                "$BACKUP_DIR/config.backup" \
+                "$DEV_CONFIG_DIR/config.json" \
+                "$WAYBAR_CONFIG_DIR/config"
+            if [ $? -ne 0 ]; then
+                warn "Config merge failed, falling back to template config"
+                cp "$DEV_CONFIG_DIR/config.json" "$WAYBAR_CONFIG_DIR/config"
+            fi
+        else
+            warn "Nix not available, using template config"
+            cp "$DEV_CONFIG_DIR/config.json" "$WAYBAR_CONFIG_DIR/config"
+        fi
+    else
+        log "No live config backup found, using template config"
+        cp "$DEV_CONFIG_DIR/config.json" "$WAYBAR_CONFIG_DIR/config"
+    fi
+    
     cp "$DEV_CONFIG_DIR/style.css" "$WAYBAR_CONFIG_DIR/style.css"
     
     # Mark as active
@@ -180,10 +203,54 @@ reload_waybar() {
         sleep 1
     fi
     
+    # Re-merge configuration if live config backup exists
+    if [ -f "$BACKUP_DIR/config.backup" ]; then
+        log "Re-merging live config with Jasper module..."
+        if command -v nix > /dev/null; then
+            cd "$SCRIPT_DIR"
+            nix develop --command python3 merge-waybar-config.py \
+                "$BACKUP_DIR/config.backup" \
+                "$DEV_CONFIG_DIR/config.json" \
+                "$WAYBAR_CONFIG_DIR/config"
+            if [ $? -ne 0 ]; then
+                warn "Config merge failed, keeping existing config"
+            fi
+        else
+            warn "Nix not available, keeping existing config"
+        fi
+    fi
+    
     # Start waybar again
     waybar &
     
     success "Waybar reloaded with development config!"
+}
+
+sync_live_config() {
+    log "Syncing live configuration changes..."
+    
+    # Check if in dev mode
+    if [ ! -f "$BACKUP_DIR/.dev-mode-active" ]; then
+        warn "Not in development mode. Use 'start' first."
+        return 1
+    fi
+    
+    # Check if there's a current live config to sync
+    if [ ! -f "$WAYBAR_CONFIG_DIR/config" ]; then
+        error "No current waybar config found to sync"
+        return 1
+    fi
+    
+    # Backup the current config as the new live config
+    log "Updating live config backup with current changes..."
+    cp "$WAYBAR_CONFIG_DIR/config" "$BACKUP_DIR/config.backup"
+    
+    # If it was a symlink originally, we lost that info, but we can't restore symlinks
+    # to changing targets anyway, so this is the best we can do
+    rm -f "$BACKUP_DIR/config.symlink"
+    
+    success "Live configuration backup updated!"
+    success "Your waybar changes will now persist when exiting development mode"
 }
 
 test_jasper() {
@@ -232,6 +299,9 @@ case "${1:-help}" in
     reload)
         reload_waybar
         ;;
+    sync)
+        sync_live_config
+        ;;
     test)
         test_jasper
         ;;
@@ -240,15 +310,22 @@ case "${1:-help}" in
         ;;
     help|--help|-h)
         echo "Jasper Development Mode"
-        echo "Usage: $0 {start|stop|reload|test|status|help}"
+        echo "Usage: $0 {start|stop|reload|sync|test|status|help}"
         echo
         echo "Commands:"
-        echo "  start   - Enter development mode (use local configs)"
+        echo "  start   - Enter development mode (merge live config with Jasper module)"
         echo "  stop    - Exit development mode (restore NixOS configs)"
-        echo "  reload  - Restart waybar with current development config"
+        echo "  reload  - Re-merge configs and restart waybar"
+        echo "  sync    - Update live config backup with current waybar changes"
         echo "  test    - Test Jasper output"
         echo "  status  - Show current mode status"
         echo "  help    - Show this help message"
+        echo
+        echo "Dynamic Configuration:"
+        echo "  • Development mode now merges your live waybar config with Jasper"
+        echo "  • All your existing modules and settings are preserved"
+        echo "  • Use 'sync' to capture waybar config changes made during development"
+        echo "  • Use 'reload' to re-apply config changes from live system"
         ;;
     *)
         error "Unknown command: $1"

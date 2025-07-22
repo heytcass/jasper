@@ -297,8 +297,8 @@ impl DatabaseInner {
             // Prepare statements for better performance (scoped to drop before commit)
             let mut insert_stmt = tx.prepare(
                 "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
-                                    location, event_type, participants, raw_data_json)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                    location, event_type, participants, raw_data_json, is_all_day)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )?;
             
             let mut check_stmt = tx.prepare(
@@ -329,6 +329,7 @@ impl DatabaseInner {
                     event.event_type,
                     event.participants,
                     event.raw_data_json,
+                    event.is_all_day.map(|v| if v { 1 } else { 0 }),
                 ])?;
                 
                 event_ids.push(tx.last_insert_rowid());
