@@ -1,0 +1,54 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+# Note: Cargo.lock should be committed for applications
+
+# Local development
+/dev.db
+/.env
+/.env.local
+
+# User data
+/data/
+/logs/
+
+# NixOS
+result
+result-*
+
+# Temporary files
+*.tmp
+*.temp
+.dev-backups/
+
+# Development artifacts (from cleanup)
+CLAUDE_INTEGRATION.md
+OPTIMIZATION_PRD.md
+QUICK_REFERENCE.md
+dev-enhanced.sh
+
+# Security - Never commit API keys or secrets
+config.toml
+*.key
+*.secret
+*api_key*
+*client_secret*
+*token*
+
+# Configuration files that might contain secrets
+/daemon/config.toml
+/config.toml
+secrets.yaml
+secrets.yml

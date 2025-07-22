@@ -1,0 +1,253 @@
+window#waybar, tooltip {
+    background: alpha(@base00, 1.000000);
+}
+
+* {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10pt;
+}
+
+@define-color base00 #262624; @define-color base01 #1f1e1d;
+@define-color base02 #30302e; @define-color base03 #4a4a46;
+@define-color base04 #c2c0b6; @define-color base05 #f8f7f3;
+@define-color base06 #9c9a92; @define-color base07 #faf9f5;
+
+@define-color base08 #d63031; @define-color base09 #c96442;
+@define-color base0A #e17055; @define-color base0B #27ae60;
+@define-color base0C #74b9ff; @define-color base0D #2c82d7;
+@define-color base0E #a29bfe; @define-color base0F #7d4a38;
+
+* {
+    color: @base05;
+}
+
+tooltip {
+    border-color: @base0D;
+}
+#wireplumber,
+#pulseaudio,
+#sndio {
+  padding: 0 5px;
+}
+#wireplumber.muted,
+#pulseaudio.muted,
+#sndio.muted {
+  padding: 0 5px;
+}
+#upower,
+#battery {
+  padding: 0 5px;
+}
+#upower.charging,
+#battery.Charging {
+  padding: 0 5px;
+}
+#network {
+  padding: 0 5px;
+}
+#network.disconnected {
+  padding: 0 5px;
+}
+#user {
+  padding: 0 5px;
+}
+#clock {
+  padding: 0 5px;
+}
+#backlight {
+  padding: 0 5px;
+}
+#cpu {
+  padding: 0 5px;
+}
+#disk {
+  padding: 0 5px;
+}
+#idle_inhibitor {
+  padding: 0 5px;
+}
+#temperature {
+  padding: 0 5px;
+}
+#mpd {
+  padding: 0 5px;
+}
+#language {
+  padding: 0 5px;
+}
+#keyboard-state {
+  padding: 0 5px;
+}
+#memory {
+  padding: 0 5px;
+}
+#window {
+  padding: 0 5px;
+}
+#bluetooth {
+  padding: 0 5px;
+}
+#bluetooth.disabled {
+  padding: 0 5px;
+}
+.modules-left #workspaces button {
+    border-bottom: 3px solid transparent;
+}
+.modules-left #workspaces button.focused,
+.modules-left #workspaces button.active {
+    border-bottom: 3px solid @base05;
+}
+.modules-center #workspaces button {
+    border-bottom: 3px solid transparent;
+}
+.modules-center #workspaces button.focused,
+.modules-center #workspaces button.active {
+    border-bottom: 3px solid @base05;
+}
+.modules-right #workspaces button {
+    border-bottom: 3px solid transparent;
+}
+.modules-right #workspaces button.focused,
+.modules-right #workspaces button.active {
+    border-bottom: 3px solid @base05;
+}
+
+/* Waybar Inter Nerd Font override */
+* {
+  font-family: "Inter Nerd Font", sans-serif;
+  font-weight: 400;
+}
+
+/* Claude signature terracotta border */
+window#waybar {
+  border-bottom: 2px solid #d77757;
+}
+
+/* Enhanced workspace styling with Claude accents */
+#workspaces button {
+  padding: 0 8px;
+  margin: 0 2px;
+  border-radius: 6px;
+  font-size: 16px;
+  min-width: 28px;
+  transition: all 0.2s ease;
+}
+
+#workspaces button.active {
+  background-color: #d77757;
+  color: #faf9f5;
+}
+
+#workspaces button:hover {
+  background-color: rgba(215, 119, 87, 0.3);
+}
+
+#workspaces button.urgent {
+  background-color: #ab2b3f;
+  color: #faf9f5;
+}
+
+/* Window title with Claude accent */
+#window {
+  color: #d77757;
+  font-weight: 500;
+}
+
+/* Enhanced power button with Claude accent */
+.custom-power {
+  border-radius: 6px;
+  margin: 0 8px 0 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  transition: all 0.2s ease;
+  color: #d77757;
+  min-width: 24px;
+}
+
+.custom-power:hover {
+  background-color: rgba(215, 119, 87, 0.2);
+  color: #faf9f5;
+}
+
+/* Subtle hover effects with Claude accent */
+#pulseaudio:hover, #network:hover, #bluetooth:hover,
+#cpu:hover, #memory:hover, #temperature:hover,
+#battery:hover, #clock:hover, #tray:hover {
+  background-color: rgba(215, 119, 87, 0.1);
+}
+
+/* Critical state indicators with Claude colors */
+#battery.critical:not(.charging) {
+  background-color: #ab2b3f;
+  color: #faf9f5;
+}
+
+#temperature.critical {
+  background-color: #ab2b3f;
+  color: #faf9f5;
+}
+
+#cpu.warning, #memory.warning {
+  background-color: #966c1e;
+  color: #faf9f5;
+}
+
+#battery.charging, #battery.plugged {
+  color: #2c7a39;
+}
+
+/* Jasper Custom Module Styles - Modern border-based design */
+#custom-jasper {
+  padding: 0 8px;
+  margin: 0 2px;
+  background-color: transparent;
+  border: 2px solid @base03;
+  border-radius: 6px;
+  font-weight: 500;
+  color: @base05;
+  transition: border-color 0.3s ease;
+  min-width: 28px;
+}
+
+#custom-jasper.critical {
+  border-color: @base08;
+  color: @base08;
+  animation: pulse-border 2s infinite;
+}
+
+#custom-jasper.warning {
+  border-color: @base0A;
+  color: @base0A;
+}
+
+#custom-jasper.info {
+  border-color: @base0D;
+  color: @base0D;
+}
+
+#custom-jasper.low {
+  border-color: @base03;
+  color: @base05;
+}
+
+#custom-jasper.clear {
+  border-color: @base0B;
+  color: @base0B;
+}
+
+#custom-jasper.minimal {
+  border-color: @base02;
+  color: @base05;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+@keyframes pulse-border {
+  0% { border-width: 2px; }
+  50% { border-width: 3px; }
+  100% { border-width: 2px; }
+}

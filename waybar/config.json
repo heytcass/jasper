@@ -1,0 +1,191 @@
+[
+  {
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "spacing": 2,
+    
+    "modules-left": [
+      "hyprland/workspaces"
+    ],
+    "modules-center": [
+      "hyprland/window",
+      "custom/jasper",
+      "custom/nix-shell"
+    ],
+    "modules-right": [
+      "tray",
+      "pulseaudio",
+      "network",
+      "bluetooth",
+      "cpu",
+      "memory",
+      "temperature",
+      "battery",
+      "clock",
+      "custom/power"
+    ],
+    
+    "hyprland/workspaces": {
+      "disable-scroll": true,
+      "all-outputs": true,
+      "format": "{icon}",
+      "format-icons": {
+        "1": "🏠",
+        "2": "🌐",
+        "3": "📝",
+        "4": "📁",
+        "5": "💬",
+        "6": "🎵",
+        "7": "⚙️",
+        "8": "🎮",
+        "9": "🖥️",
+        "10": "📋",
+        "default": "💼",
+        "urgent": "⚠️"
+      }
+    },
+    
+    "hyprland/window": {
+      "format": "{}",
+      "max-length": 50,
+      "tooltip-format": "Active window: {}",
+      "on-click": "hyprctl dispatch fullscreen",
+      "separate-outputs": true
+    },
+    
+    "tray": {
+      "spacing": 5,
+      "icon-size": 16,
+      "show-passive-items": false
+    },
+    
+    "custom/nix-shell": {
+      "format": "{}",
+      "exec": "if [ -n \"$IN_NIX_SHELL\" ]; then echo '❄️'; else echo ''; fi",
+      "tooltip-format": "Nix development shell active",
+      "interval": 5
+    },
+    
+    "custom/jasper": {
+      "format": "{}",
+      "tooltip": true,
+      "interval": 900,
+      "exec": "/home/tom/git/jasper/waybar-jasper.sh",
+      "return-type": "json",
+      "signal": 8,
+      "on-click": "notify-send 'Jasper' 'Refreshing insights...' && pkill -RTMIN+8 waybar"
+    },
+    
+    "custom/power": {
+      "format": "  ⏻  ",
+      "tooltip-format": "Power Menu",
+      "on-click": "wlogout",
+      "on-click-right": "hyprlock"
+    },
+    
+    "clock": {
+      "format": "{:%H:%M}",
+      "format-alt": "{:%Y-%m-%d}",
+      "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>"
+    },
+    
+    "cpu": {
+      "format": "{usage}%",
+      "tooltip-format": "CPU Usage: {usage}%",
+      "on-click": "top",
+      "on-click-right": "procs",
+      "interval": 5
+    },
+    
+    "memory": {
+      "format": "{percentage}%",
+      "tooltip-format": "RAM: {used:0.1f}G / {total:0.1f}G ({percentage}%)\nSwap: {swapUsed:0.1f}G / {swapTotal:0.1f}G",
+      "on-click": "top",
+      "on-click-right": "procs",
+      "interval": 5
+    },
+    
+    "temperature": {
+      "critical-threshold": 80,
+      "format": "{temperatureC}°",
+      "format-critical": "{temperatureC}°",
+      "tooltip-format": "Temperature: {temperatureC}°C ({temperatureF}°F)",
+      "format-icons": [
+        "",
+        "",
+        ""
+      ],
+      "interval": 10
+    },
+    
+    "battery": {
+      "states": {
+        "warning": 30,
+        "critical": 15
+      },
+      "format": "{capacity}%",
+      "format-charging": "{capacity}%",
+      "format-plugged": "{capacity}%",
+      "tooltip-format": "Battery: {capacity}%",
+      "format-icons": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "interval": 30
+    },
+    
+    "network": {
+      "format-wifi": "{essid} ",
+      "format-ethernet": "󰈀 Connected",
+      "format-linked": "󰈀 No IP",
+      "format-disconnected": "󰈂 Disconnected",
+      "tooltip-format-wifi": "WiFi: {essid} ({signalStrength}%)\nIP: {ipaddr}/{cidr}\nGateway: {gwaddr}",
+      "tooltip-format-ethernet": "Ethernet: {ifname}\nIP: {ipaddr}/{cidr}\nGateway: {gwaddr}",
+      "interval": 10
+    },
+    
+    "bluetooth": {
+      "format": " {status}",
+      "format-disabled": "",
+      "format-off": "",
+      "format-connected": " {num_connections}",
+      "format-connected-battery": " {device_alias} {device_battery_percentage}%",
+      "tooltip-format": "Bluetooth: {status}",
+      "tooltip-format-connected": "Bluetooth: {device_enumerate}",
+      "tooltip-format-enumerate-connected": "{device_alias}\\t{device_address}",
+      "tooltip-format-enumerate-connected-battery": "{device_alias}\\t{device_address}\\t{device_battery_percentage}%",
+      "on-click": "overskride",
+      "on-click-right": "bluetui",
+      "interval": 30,
+      "max-length": 25
+    },
+    
+    "pulseaudio": {
+      "format": "{volume}% {icon}",
+      "format-bluetooth": "{volume}% {icon}",
+      "format-bluetooth-muted": " {icon}",
+      "format-muted": " ",
+      "format-source": "{volume}% ",
+      "format-source-muted": "",
+      "tooltip-format": "Audio: {volume}% ({desc})\nSource: {source_volume}%",
+      "format-icons": {
+        "headphone": "",
+        "hands-free": "",
+        "headset": "",
+        "phone": "",
+        "portable": "",
+        "car": "",
+        "default": [
+          "",
+          "",
+          ""
+        ]
+      },
+      "on-click": "pavucontrol"
+    }
+  }
+]
