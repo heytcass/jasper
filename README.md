@@ -67,7 +67,7 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 
 1. **Clone and build**:
    ```bash
-   git clone https://github.com/yourusername/jasper.git
+   git clone https://github.com/heytcass/jasper.git
    cd jasper
    cargo build --release
    ```
@@ -269,7 +269,7 @@ Jasper uses a specialized development workflow optimized for NixOS environments.
 
 ### Quick Contributor Setup
 ```bash
-git clone https://github.com/yourusername/jasper.git
+git clone https://github.com/heytcass/jasper.git
 cd jasper
 nix develop                  # Enter development shell
 ./dev-mode.sh start         # Start development mode
