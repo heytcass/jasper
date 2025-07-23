@@ -29,7 +29,7 @@ impl Command for StartCommand {
             self.test_correlations(context).await?;
             info!("Starting D-Bus service for testing...");
             tokio::select! {
-                result = CompanionService::new(context.database.clone(), context.correlation_engine.clone()) => {
+                result = CompanionService::new(context.database.clone(), context.correlation_engine.clone(), context.config.clone()) => {
                     match result {
                         Ok(_) => info!("D-Bus service ended normally"),
                         Err(e) => info!("D-Bus service error: {}", e),
@@ -53,7 +53,7 @@ impl StartCommand {
 
         // Start D-Bus service and wait for shutdown
         tokio::select! {
-            result = CompanionService::new(context.database.clone(), context.correlation_engine.clone()) => {
+            result = CompanionService::new(context.database.clone(), context.correlation_engine.clone(), context.config.clone()) => {
                 match result {
                     Ok(_) => info!("D-Bus service ended normally"),
                     Err(e) => info!("D-Bus service error: {}", e),

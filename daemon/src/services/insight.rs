@@ -5,7 +5,6 @@ use tracing::{info, debug};
 
 use crate::correlation_engine::CorrelationEngine;
 use crate::database::Correlation;
-use crate::services::notification::{NotificationType, NotificationService};
 
 /// Service for AI insight generation and analysis
 pub struct InsightService {
@@ -35,13 +34,7 @@ impl InsightService {
         
         info!("Insight analysis completed with {} correlations", correlations.len());
         
-        // Send notification about analysis completion
-        let notification_service = self.correlation_engine.notification_service();
-        if let Err(e) = notification_service.notify(NotificationType::AnalysisComplete {
-            insights_count: correlations.len(),
-        }).await {
-            debug!("Failed to send analysis completion notification: {}", e);
-        }
+        // Note: Notifications are handled by the CorrelationEngine itself to avoid duplicates
         
         Ok(correlations)
     }

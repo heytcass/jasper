@@ -21,6 +21,9 @@ mod errors;
 mod sops_integration;
 mod context_sources;
 mod error_recovery;
+mod frontend_framework;
+mod formatters;
+mod frontend_manager;
 
 use config::Config;
 use database::DatabaseInner;

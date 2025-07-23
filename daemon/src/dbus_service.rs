@@ -2,23 +2,30 @@ use anyhow::Result;
 use zbus::ConnectionBuilder;
 use std::sync::Arc;
 use parking_lot::Mutex;
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 
 use crate::database::Database;
 use crate::correlation_engine::CorrelationEngine;
+use crate::config::Config;
+use crate::frontend_framework::InsightData;
+use crate::frontend_manager::FrontendManager;
 
 pub struct CompanionService {
     database: Database,
     correlation_engine: CorrelationEngine,
     current_insights: Arc<Mutex<Vec<crate::database::Correlation>>>,
+    config: Arc<parking_lot::RwLock<Config>>,
+    frontend_manager: FrontendManager,
 }
 
 impl CompanionService {
-    pub async fn new(database: Database, correlation_engine: CorrelationEngine) -> Result<()> {
+    pub async fn new(database: Database, correlation_engine: CorrelationEngine, config: Arc<parking_lot::RwLock<Config>>) -> Result<()> {
         let service = CompanionService {
             database: database.clone(),
             correlation_engine,
             current_insights: Arc::new(Mutex::new(Vec::new())),
+            config,
+            frontend_manager: FrontendManager::new(),
         };
 
         // Analyze correlations on startup
@@ -110,5 +117,44 @@ impl CompanionService {
     /// Get daemon status
     async fn get_status(&self) -> String {
         "Observing".to_string()
+    }
+
+    /// Get insights formatted for any supported frontend
+    async fn get_formatted_insights(&self, frontend_id: String) -> String {
+        let correlations = self.current_insights.lock().clone();
+        let timezone = self.config.read().get_timezone();
+        
+        // Convert correlations to InsightData format
+        let insights: Vec<InsightData> = correlations.iter()
+            .map(InsightData::from_correlation)
+            .collect();
+        
+        // Use the frontend manager to format for the requested frontend
+        match self.frontend_manager.format(&frontend_id, &insights, timezone) {
+            Ok(formatted) => formatted,
+            Err(e) => {
+                warn!("Failed to format insights for frontend '{}': {}", frontend_id, e);
+                
+                // Try to return an error format for the requested frontend
+                match self.frontend_manager.format_error(&frontend_id, &format!("Formatting error: {}", e), timezone) {
+                    Ok(error_formatted) => error_formatted,
+                    Err(_) => {
+                        // Final fallback - return a generic error message
+                        format!(r#"{{"error": "Unknown frontend '{}' or formatting failed"}}"#, frontend_id)
+                    }
+                }
+            }
+        }
+    }
+
+    /// List all available frontends
+    async fn list_frontends(&self) -> Vec<(String, String)> {
+        self.frontend_manager.list_frontends()
+    }
+
+    /// Get insights formatted for Waybar JSON output (backwards compatibility)
+    async fn get_waybar_json(&self) -> String {
+        // Use the new frontend system for consistency, but maintain backwards compatibility
+        self.get_formatted_insights("waybar".to_string()).await
     }
 }

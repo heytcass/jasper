@@ -56,6 +56,33 @@ impl NotificationService {
 
     /// Send a notification if configured and not on cooldown
     pub async fn notify(&self, notification_type: NotificationType) -> Result<()> {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        // Create a simple file-based lock to prevent multiple notifications from multiple waybar instances
+        let lock_dir = "/tmp/jasper-notifications";
+        let _ = fs::create_dir_all(&lock_dir);
+        
+        // Create a lock file based on notification content hash for deduplication
+        let notification_hash = format!("{:x}", md5::compute(format!("{:?}", notification_type).as_bytes()));
+        let lock_file = format!("{}/notify-{}", lock_dir, notification_hash);
+        
+        // Check if notification was sent recently (within 5 seconds)
+        if let Ok(metadata) = fs::metadata(&lock_file) {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration_since_epoch) = modified.duration_since(UNIX_EPOCH) {
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+                    if now.as_secs() - duration_since_epoch.as_secs() < 5 {
+                        debug!("Notification recently sent by another process, skipping");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        
+        // Create/update lock file
+        let _ = fs::write(&lock_file, "locked");
+        
         let config = self.config.read().clone();
         
         if !config.enabled {
