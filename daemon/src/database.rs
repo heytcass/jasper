@@ -41,19 +41,6 @@ pub struct Calendar {
     pub metadata: Option<String>, // JSON
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Insight {
-    pub id: i64,
-    pub timestamp: i64,
-    pub insight_type: String,
-    pub urgency_score: Option<i32>,
-    pub full_insight_json: String,
-    pub short_summary: String,
-    pub related_events: Option<String>, // JSON array
-    pub related_tasks: Option<String>,  // JSON array
-    pub acknowledged: bool,
-    pub user_feedback: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Correlation {
@@ -178,22 +165,6 @@ impl DatabaseInner {
             [],
         )?;
 
-        // Create insights table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS insights (
-                id INTEGER PRIMARY KEY,
-                timestamp INTEGER NOT NULL,
-                insight_type TEXT NOT NULL,
-                urgency_score INTEGER,
-                full_insight_json TEXT NOT NULL,
-                short_summary TEXT NOT NULL,
-                related_events TEXT,
-                related_tasks TEXT,
-                acknowledged BOOLEAN DEFAULT FALSE,
-                user_feedback TEXT
-            )",
-            [],
-        )?;
 
         // Create event_relationships table
         conn.execute(
@@ -402,39 +373,8 @@ impl DatabaseInner {
         }
     }
 
-    #[allow(dead_code)] // Used for storing AI insights - will be used when insight storage is implemented
-    pub fn store_insight(&self, insight: &Insight) -> Result<i64> {
-        let conn = self.connection.lock();
-        conn.execute(
-            "INSERT INTO insights (timestamp, insight_type, urgency_score, full_insight_json,
-                                  short_summary, related_events, related_tasks, acknowledged, user_feedback)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                insight.timestamp,
-                insight.insight_type,
-                insight.urgency_score,
-                insight.full_insight_json,
-                insight.short_summary,
-                insight.related_events,
-                insight.related_tasks,
-                insight.acknowledged,
-                insight.user_feedback
-            ]
-        )?;
-
-        Ok(conn.last_insert_rowid())
-    }
 
 
-    #[allow(dead_code)] // Used for acknowledging AI insights - will be used when insight management is implemented  
-    pub fn acknowledge_insight(&self, insight_id: i64) -> Result<()> {
-        let conn = self.connection.lock();
-        conn.execute(
-            "UPDATE insights SET acknowledged = TRUE WHERE id = ?",
-            params![insight_id]
-        )?;
-        Ok(())
-    }
     
     pub fn execute_sql(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<usize> {
         let conn = self.connection.lock();

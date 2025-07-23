@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
 
 # Waybar script wrapper for Jasper
-# This script provides a timeout and fallback for the waybar integration
+# This script uses the D-Bus interface exclusively
 
 TIMEOUT=30
-JASPER_LOCAL="/home/tom/git/jasper/target/debug/jasper-companion-daemon"
-JASPER_SYSTEM="jasper-companion-daemon"
 
-# Try local build first (has waybar command), then fall back to system binary
-if [ -x "$JASPER_LOCAL" ]; then
-    JASPER_CMD="$JASPER_LOCAL waybar"
-else
-    JASPER_CMD="$JASPER_SYSTEM waybar"
-fi
-
-# Try to run jasper with timeout, suppress ALL output except the final JSON line
-if output=$(timeout $TIMEOUT $JASPER_CMD 2>/dev/null | tail -n 1); then
+# Try D-Bus interface (only method)
+if output=$(timeout $TIMEOUT dbus-send --session --dest=org.personal.CompanionAI --print-reply --type=method_call /org/personal/CompanionAI/Companion org.personal.CompanionAI.Companion1.GetFormattedInsights string:"waybar" 2>/dev/null | grep -E '^\s*string\s*"' | sed 's/^\s*string\s*"\(.*\)"$/\1/' | sed 's/\\"/"/g'); then
     # Only output if we got valid JSON (starts with {)
     if [[ "$output" =~ ^\{.*\}$ ]]; then
         echo "$output"
@@ -23,6 +14,6 @@ if output=$(timeout $TIMEOUT $JASPER_CMD 2>/dev/null | tail -n 1); then
     fi
 fi
 
-# Fallback case - provide fallback JSON
-echo '{"text":"📅","tooltip":"Jasper is starting up or analyzing your calendar","alt":"loading","class":"minimal","percentage":null}'
+# D-Bus failed - daemon not running or no insights available
+echo '{"text":"📅","tooltip":"Jasper daemon not available","alt":"loading","class":"minimal","percentage":null}'
 exit 0

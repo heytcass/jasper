@@ -534,10 +534,9 @@ impl CorrelationEngine {
         let additional_context = self.fetch_additional_context(now, future_window).await;
         
         // Create a comprehensive hash of all context sources for caching
-        let full_context_hash = self.api_manager.create_context_hash(&events, &additional_context);
         
         // Check if context has changed meaningfully
-        if !self.should_generate_new_insight(&full_context_hash, &events, &additional_context) {
+        if !self.should_generate_new_insight("", &events, &additional_context) {
             // Return the last insight if context hasn't changed significantly
             if let Some(last_state) = self.last_context_state.read().as_ref() {
                 if let Some(last_insight) = &last_state.last_insight {
@@ -555,28 +554,24 @@ impl CorrelationEngine {
             }
         }
         
-        // Check cache first for new insights
-        if let Some(cached_insight) = self.api_manager.get_cached_insight(&full_context_hash) {
-            info!("Using cached analysis for full context");
-            self.update_context_state(&full_context_hash, &cached_insight, &events, &additional_context);
-            
-            // Note: No notification for cached insights - they've already been notified about
-            
-            return Ok(vec![Correlation {
-                id: uuid::Uuid::new_v4().to_string(),
-                event_ids: events.iter().map(|e| e.id).collect(),
-                insight: cached_insight,
-                action_needed: "Review cached insights".to_string(),
-                urgency_score: 5,
-                discovered_at: Utc::now(),
-                recommended_glyph: Some("󰃭".to_string()), // Default calendar icon
-            }]);
-        }
         
         // Check if we can make an API call
         if !self.api_manager.can_make_api_call() {
-            warn!("Daily API limit reached. Using emergency fallback.");
-            return self.emergency_fallback_analysis(&events);
+            warn!("Daily API limit reached. Using last cached insight.");
+            if let Some(cached_insight) = self.api_manager.get_last_insight() {
+                return Ok(vec![Correlation {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    event_ids: events.iter().map(|e| e.id).collect(),
+                    insight: cached_insight,
+                    action_needed: "Review cached insights".to_string(),
+                    urgency_score: 5,
+                    discovered_at: Utc::now(),
+                    recommended_glyph: Some("󰃭".to_string()), // Default calendar icon
+                }]);
+            } else {
+                warn!("No cached insights available and API limit reached");
+                return Ok(vec![]);
+            }
         }
         
         // Prepare AI analysis request
@@ -591,10 +586,10 @@ impl CorrelationEngine {
                 self.api_manager.record_api_call(1500); // Estimate 1500 tokens
                 
                 // Cache the result
-                self.api_manager.cache_insight(full_context_hash.clone(), ai_response.insight.message.clone());
+                self.api_manager.cache_insight(ai_response.insight.message.clone());
                 
                 // Update context state with new insight
-                self.update_context_state(&full_context_hash, &ai_response.insight.message, &events, &additional_context);
+                self.update_context_state("", &ai_response.insight.message, &events, &additional_context);
                 
                 // Send notification for new insight
                 if let Err(e) = self.notification_service.notify(NotificationType::NewInsight {
@@ -610,8 +605,21 @@ impl CorrelationEngine {
                 result
             }
             Err(e) => {
-                warn!("AI analysis failed: {}. Using emergency fallback.", e);
-                self.emergency_fallback_analysis(&events)
+                warn!("AI analysis failed: {}. Using last cached insight.", e);
+                if let Some(cached_insight) = self.api_manager.get_last_insight() {
+                    Ok(vec![Correlation {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        event_ids: events.iter().map(|e| e.id).collect(),
+                        insight: cached_insight,
+                        action_needed: "Review cached insights".to_string(),
+                        urgency_score: 5,
+                        discovered_at: Utc::now(),
+                        recommended_glyph: Some("󰃭".to_string()), // Default calendar icon
+                    }])
+                } else {
+                    warn!("No cached insights available and AI analysis failed");
+                    Ok(vec![])
+                }
             }
         }
     }
@@ -1094,23 +1102,6 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
         Ok(())
     }
 
-    fn emergency_fallback_analysis(&self, events: &[Event]) -> Result<Vec<Correlation>> {
-        warn!("Using emergency fallback analysis - Claude API unavailable");
-        
-        // Provide basic conflict detection as emergency fallback
-        let mut correlations = Vec::new();
-        
-        // Optimized O(n log n) overlap detection using sweep line algorithm
-        correlations.extend(self.detect_overlaps_optimized(events));
-
-        if correlations.is_empty() {
-            info!("No conflicts detected in emergency fallback analysis");
-        } else {
-            info!("Emergency fallback found {} potential conflicts", correlations.len());
-        }
-
-        Ok(correlations)
-    }
 
     fn events_overlap(&self, event1: &Event, event2: &Event) -> bool {
         let event1_start = event1.start_time;

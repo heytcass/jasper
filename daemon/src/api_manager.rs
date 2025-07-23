@@ -1,16 +1,13 @@
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tracing::{debug, warn, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CachedInsight {
-    insight: String,
-    cached_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    calendar_hash: String, // Hash of the calendar events to detect changes
+struct SimpleInsightCache {
+    last_insight: Option<String>,
+    cached_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,9 +21,8 @@ struct ApiCallStats {
 
 #[derive(Clone)]
 pub struct ApiManager {
-    cache: Arc<RwLock<HashMap<String, CachedInsight>>>,
+    cache: Arc<RwLock<SimpleInsightCache>>,
     stats: Arc<RwLock<ApiCallStats>>,
-    cache_duration_hours: i64,
 }
 
 impl ApiManager {
@@ -40,9 +36,11 @@ impl ApiManager {
         };
 
         Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache: Arc::new(RwLock::new(SimpleInsightCache {
+                last_insight: None,
+                cached_at: None,
+            })),
             stats: Arc::new(RwLock::new(stats)),
-            cache_duration_hours: 6, // Cache insights for 6 hours
         }
     }
 
@@ -81,66 +79,26 @@ impl ApiManager {
         }
     }
 
-    pub fn get_cached_insight(&self, calendar_hash: &str) -> Option<String> {
+    pub fn get_last_insight(&self) -> Option<String> {
         let cache = self.cache.read();
         
-        if let Some(cached) = cache.get(calendar_hash) {
-            if Utc::now() < cached.expires_at {
-                debug!("Using cached insight for calendar hash: {}", calendar_hash);
-                return Some(cached.insight.clone());
-            } else {
-                debug!("Cached insight expired for calendar hash: {}", calendar_hash);
-            }
+        if let Some(ref insight) = cache.last_insight {
+            debug!("Using last cached insight");
+            Some(insight.clone())
+        } else {
+            debug!("No cached insight available");
+            None
         }
-        
-        None
     }
 
-    pub fn cache_insight(&self, calendar_hash: String, insight: String) {
-        debug!("Starting cache_insight for hash: {}", calendar_hash);
-        {
-            let mut cache = self.cache.write();
-            let now = Utc::now();
-            
-            let cached_insight = CachedInsight {
-                insight,
-                cached_at: now,
-                expires_at: now + Duration::hours(self.cache_duration_hours),
-                calendar_hash: calendar_hash.clone(),
-            };
-            
-            cache.insert(calendar_hash.clone(), cached_insight);
-            debug!("Cached insight for calendar hash: {}", calendar_hash);
-        }
-        
-        debug!("About to cleanup expired cache");
-        // Clean up expired entries (with separate lock)
-        self.cleanup_expired_cache();
-        debug!("Cache cleanup completed");
-    }
-
-    fn cleanup_expired_cache(&self) {
+    pub fn cache_insight(&self, insight: String) {
+        debug!("Caching latest insight");
         let mut cache = self.cache.write();
-        let now = Utc::now();
-        
-        let expired_keys: Vec<String> = cache.iter()
-            .filter(|(_, cached)| now >= cached.expires_at)
-            .map(|(key, _)| key.clone())
-            .collect();
-        
-        for key in expired_keys {
-            cache.remove(&key);
-        }
-        
-        if cache.len() > 100 {
-            // Limit cache size to prevent memory bloat
-            warn!("Cache size ({}) exceeds limit, clearing oldest entries", cache.len());
-            let mut entries: Vec<(String, CachedInsight)> = cache.drain().collect();
-            entries.sort_by(|a, b| b.1.cached_at.cmp(&a.1.cached_at));
-            entries.truncate(50); // Keep 50 most recent
-            *cache = entries.into_iter().collect();
-        }
+        cache.last_insight = Some(insight);
+        cache.cached_at = Some(Utc::now());
+        debug!("Cached latest insight");
     }
+
 
     pub fn create_calendar_hash(&self, events: &[impl std::fmt::Debug]) -> String {
         // Create a simple hash of the calendar events
@@ -216,7 +174,8 @@ impl ApiManager {
 
     pub fn clear_cache(&self) {
         let mut cache = self.cache.write();
-        cache.clear();
+        cache.last_insight = None;
+        cache.cached_at = None;
         debug!("Cache cleared");
     }
 
@@ -257,12 +216,12 @@ mod tests {
         let insight = "Test insight".to_string();
         
         // Should return None initially
-        assert!(manager.get_cached_insight(&hash).is_none());
+        assert!(manager.get_last_insight().is_none());
         
         // Cache an insight
-        manager.cache_insight(hash.clone(), insight.clone());
+        manager.cache_insight(insight.clone());
         
         // Should return cached insight
-        assert_eq!(manager.get_cached_insight(&hash), Some(insight));
+        assert_eq!(manager.get_last_insight(), Some(insight));
     }
 }
