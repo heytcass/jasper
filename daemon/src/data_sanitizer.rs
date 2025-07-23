@@ -370,7 +370,7 @@ impl DataSanitizer {
             .map(|(date, count)| format!("{} ({} events)", date, count))
     }
     
-    fn extract_calendar_owner_with_config(&self, calendar_name: &str, config: Option<&Config>) -> String {
+    pub fn extract_calendar_owner_with_config(&self, calendar_name: &str, config: Option<&Config>) -> String {
         // First try to use config mappings if available
         if let Some(config) = config {
             if let Some(owner) = config.get_calendar_owner(calendar_name) {
@@ -397,14 +397,64 @@ impl DataSanitizer {
         } else if lower_name.contains("work") || lower_name.contains("office") {
             "Work".to_string()
         } else {
-            // Try to extract first name or reasonable identifier
-            // For now, use a simplified approach
-            calendar_name.split('@').next()
-                .unwrap_or(calendar_name)
-                .split('.')
-                .next()
-                .unwrap_or("Unknown")
-                .to_string()
+            // Enhanced name extraction from email addresses and calendar names
+            self.extract_name_from_identifier(calendar_name)
+        }
+    }
+    
+    /// Extract a human-readable name from calendar identifier (email, etc.)
+    fn extract_name_from_identifier(&self, identifier: &str) -> String {
+        // Handle email addresses
+        if let Some(local_part) = identifier.split('@').next() {
+            // Handle common email patterns like first.last, firstname.lastname, etc.
+            if local_part.contains('.') {
+                let parts: Vec<&str> = local_part.split('.').collect();
+                if parts.len() >= 2 {
+                    // Capitalize first and last names
+                    let first_name = self.capitalize_name(parts[0]);
+                    let last_name = self.capitalize_name(parts[1]);
+                    return format!("{} {}", first_name, last_name);
+                }
+            }
+            
+            // Handle patterns with numbers or underscores
+            let clean_name = local_part
+                .replace('_', " ")
+                .replace('-', " ")
+                .split_whitespace()
+                .map(|word| self.capitalize_name(word))
+                .collect::<Vec<_>>()
+                .join(" ");
+                
+            if !clean_name.is_empty() {
+                return clean_name;
+            }
+        }
+        
+        // Fallback: just capitalize the identifier
+        self.capitalize_name(identifier)
+    }
+    
+    /// Capitalize a name appropriately
+    fn capitalize_name(&self, name: &str) -> String {
+        if name.is_empty() {
+            return name.to_string();
+        }
+        
+        // Remove numbers and special characters, keep only letters
+        let clean: String = name.chars()
+            .filter(|c| c.is_alphabetic())
+            .collect();
+            
+        if clean.is_empty() {
+            return "Person".to_string();
+        }
+        
+        // Capitalize first letter, lowercase the rest
+        let mut chars = clean.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
         }
     }
     

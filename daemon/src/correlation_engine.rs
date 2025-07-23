@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::collections::HashMap;
 use parking_lot::RwLock;
 use chrono::{Utc, DateTime};
 use chrono_tz;
@@ -516,6 +517,13 @@ impl CorrelationEngine {
         // Enrich events with calendar information before sanitization
         let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
         
+        // Auto-discover calendar owners if not already configured (runs once in a while)
+        if self.config.read().calendar_owners.is_none() {
+            if let Err(e) = self.auto_discover_calendar_owners().await {
+                debug!("Auto-discovery failed, but continuing with analysis: {}", e);
+            }
+        }
+        
         // Sanitize calendar data for AI analysis with config
         let sanitized_context = {
             let config = self.config.read();
@@ -552,13 +560,7 @@ impl CorrelationEngine {
             info!("Using cached analysis for full context");
             self.update_context_state(&full_context_hash, &cached_insight, &events, &additional_context);
             
-            // Send notification for cached insight if it's still relevant
-            if let Err(e) = self.notification_service.notify(NotificationType::NewInsight {
-                message: cached_insight.clone(),
-                icon: Some("󰃭".to_string()),
-            }).await {
-                warn!("Failed to send cached insight notification: {}", e);
-            }
+            // Note: No notification for cached insights - they've already been notified about
             
             return Ok(vec![Correlation {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -603,7 +605,7 @@ impl CorrelationEngine {
                 }
                 
                 debug!("About to convert AI insight to correlation");
-                let result = self.convert_single_insight_to_correlation(ai_response.insight, &events);
+                let result = self.convert_single_insight_to_correlation(ai_response.insight, &events).await;
                 debug!("Conversion completed with result: {:?}", result.is_ok());
                 result
             }
@@ -634,15 +636,12 @@ impl CorrelationEngine {
             additional_context,
             user_preferences,
             analysis_focus: vec![
-                "scheduling_conflicts".to_string(),
-                "preparation_time".to_string(),
-                "overcommitment".to_string(),
-                "travel_logistics".to_string(),
-                "wellness_balance".to_string(),
-                "opportunities".to_string(),
-                "relationship_maintenance".to_string(),
-                "project_deadlines".to_string(),
-                "personal_development".to_string(),
+                "immediate_needs".to_string(),
+                "today_and_tomorrow".to_string(),
+                "obvious_connections".to_string(),
+                "actionable_awareness".to_string(),
+                "personal_responsibilities".to_string(),
+                "simple_reminders".to_string(),
                 "context_awareness".to_string(),
             ],
         })
@@ -712,15 +711,43 @@ impl CorrelationEngine {
         let current_datetime = now_local.format("%Y-%m-%d %I:%M %p").to_string();
         let current_day = now_local.format("%A, %B %d, %Y").to_string();
         
-        let personality_guidance = match prefs.formality.as_str() {
-            "formal" => "You are a thoughtful personal assistant who notices important details and provides direct, helpful guidance.",
-            "casual" => "You are a caring, observant friend who notices important details and speaks naturally.",
-            _ => "You are a thoughtful personal assistant who notices important details and provides direct, helpful guidance.",
+        // Get personality configuration values from config
+        let (personality_guidance, childcare_helper_term, persona_reference) = {
+            let config_guard = self.config.read();
+            let (personality_config, _) = config_guard.get_personality_config();
+            
+            let guidance = match prefs.formality.as_str() {
+                "formal" => {
+                    let persona_text = if let Some(ref persona) = personality_config.persona_reference {
+                        format!("{} - personally invested, familiar with everyone, and proactively helpful.", persona)
+                    } else {
+                        "- personally invested, familiar with everyone, and proactively helpful.".to_string()
+                    };
+                    format!("You are a {} {}", personality_config.assistant_persona, persona_text)
+                },
+                "casual" => "You are a caring family companion who knows everyone personally and speaks naturally about their lives and needs.".to_string(),
+                _ => {
+                    let persona_text = if let Some(ref persona) = personality_config.persona_reference {
+                        format!("{} - personally invested, familiar with everyone, and proactively helpful.", persona)
+                    } else {
+                        "- personally invested, familiar with everyone, and proactively helpful.".to_string()
+                    };
+                    format!("You are a {} {}", personality_config.assistant_persona, persona_text)
+                },
+            };
+            
+            (
+                guidance,
+                personality_config.childcare_helper_term.clone(),
+                personality_config.persona_reference.as_deref().unwrap_or("").to_string()
+            )
         };
 
         format!(r#"You are Jasper, a personal digital companion. {personality_guidance}
 
 Analyze this calendar and identify THE most important insight that needs attention right now. Look for meaningful patterns, conflicts, and relationships between events.
+
+**IMPORTANT**: Keep your response short and punchy - 2-3 sentences maximum. Get straight to the point without being wordy.
 
 CURRENT CONTEXT:
 - Current date and time: {} ({})
@@ -739,7 +766,7 @@ Pattern summary: {}
 
 IMPORTANT: All event times below are in UTC format (ending with Z). When referencing times in your insights, convert them to the user's timezone ({}) and use 12-hour format with AM/PM. For example: "2025-07-16T15:00:00Z" should be referenced as "11:00 AM" in your response.
 
-**ALL-DAY EVENT HANDLING**: Some events have "is_all_day": true. These are all-day events that span entire days. Do NOT treat all-day events as happening at specific times like "tonight" or "this evening". Instead, refer to them by their date (e.g., "Sunday's task" or "this Sunday").
+**ALL-DAY EVENT HANDLING**: Events with "is_all_day": true are usually reminders, not time-consuming activities. Birthdays are reminders to send messages/calls, not parties to plan. "{}" type events are just tracking when childcare help is available. Don't treat these as events that need preparation or conflict with your schedule - they're background information.
 
 CALENDAR EVENTS:
 {}
@@ -755,62 +782,44 @@ The following additional context sources provide deeper insights into your life 
 - **Relationship Alerts**: Prioritize communication needs based on last contact dates
 - **Project Status**: Use project progress and deadlines for workload assessment
 
-**MANDATORY PRIORITY CHECK**: Before analyzing anything else, scan for:
-1. **YOUR PERSONAL EVENTS** from calendars labeled "Me (Family Coordination)" or "Me (Personal Tasks)"
-2. **EVENTS HAPPENING TOMORROW** (within 24 hours from current time)
-3. **EVENTS HAPPENING TODAY** (if any remain)
+**ANALYSIS APPROACH**:
+Look for insights that are genuinely helpful and actionable. Use your judgment to identify what's most relevant and immediate. Avoid overthinking logistics - often the solution is obvious based on who is available and where they are. Focus on simple, direct insights rather than complex coordination scenarios.
 
-**CRITICAL RULE**: If you find ANY events from "Me (Family Coordination)" or "Me (Personal Tasks)" calendars happening in the next 1-3 days, you MUST prioritize them over all other events, regardless of complexity of other situations.
+**CREATIVE INSIGHT GENERATION**: Don't just follow example templates. Think creatively about what would be most helpful to know. Each situation is unique - craft insights that fit the specific circumstances rather than copying patterns from examples.
 
-**TEMPORAL PRIORITY HIERARCHY** (MANDATORY ORDER):
-1. **YOUR events happening TODAY** (absolute top priority)
-2. **YOUR events happening TOMORROW** (second priority)
-3. **YOUR events happening THIS WEEK** (third priority)
-4. **Other family events happening TODAY/TOMORROW** (fourth priority)
-5. **Other family events happening THIS WEEK** (fifth priority)
-6. **Future events beyond this week** (lowest priority)
+**PERSONAL TOUCH**: Act like a family assistant focused on helping YOU specifically. When you see events for other family members, think about what that means for YOUR responsibilities and schedule. Don't give advice about what your wife should do - focus on what YOU need to handle or be aware of.
 
-**CALENDAR OWNER DETECTION** (MANDATORY STEP):
-Before analyzing any events, you MUST check the "calendar_owner" field for EVERY event. This tells you WHO the event belongs to:
-- "Me (Family Coordination)" = YOUR events (highest priority)
-- "Me (Personal Tasks)" = YOUR events (highest priority)  
-- "Wife (Coordination Needed)" = Your wife's events (mention as "Your wife...")
-- "Son (Parent Logistics)" = Your son's events (mention as "Your son...")
-- "Daughter (Parent Logistics)" = Your daughter's events (mention as "Your daughter...")
+**CALENDAR OWNERSHIP**: Check the "calendar_owner" field to understand whose events you're looking at:
+- "Me (Family Coordination)" or "Me (Personal Tasks)" = Your personal events
+- "Wife (Coordination Needed)" = Your wife's events  
+- "Son/Daughter (Parent Logistics)" = Your children's events
 
-**EXAMPLES OF PROPER CALENDAR OWNER USAGE**:
-- Event on "Wife (Coordination Needed)" calendar going to Boston → "Your wife is traveling to Boston"
-- Event on "Me (Family Coordination)" calendar for haircut → "You have a haircut appointment"
-- Event on "Son (Parent Logistics)" calendar for haircut → "Your son has a haircut appointment"
+**LOCATION & LOGIC**: Apply common sense about geography and logistics. If someone is traveling to another state, they obviously can't be in two places at once. Focus on what this means for the person staying behind.
 
-**TEMPORAL PRIORITY RULE**: Events happening TOMORROW (1 day away) are MORE IMPORTANT than events happening in 4+ days, regardless of complexity. A simple appointment tomorrow beats a complex situation later in the week.
+**TEMPORAL RELEVANCE**: Prioritize events happening today and tomorrow over future events. A simple event tomorrow typically needs more immediate attention than a complex situation next week. Focus on what actually requires action or preparation in the near term rather than getting distracted by distant complexity.
 
-**EXAMPLE SCENARIOS**:
-- If YOU have a haircut Wednesday AND there's a family event Saturday → Focus on YOUR Wednesday haircut
-- If YOU have a meeting tomorrow AND there's a complex weekend situation → Focus on YOUR tomorrow meeting
-- If YOU have any appointment in the next 2 days AND family has events later → Focus on YOUR appointment
+**OBVIOUS CONTEXT RECOGNITION**: 
+Use basic logic and common sense. If someone is traveling far away, they can't handle local responsibilities. If it's a child's activity and only one parent is available, it's obvious who handles it. Don't overcomplicate simple situations - just state the obvious implication directly.
 
-**CALENDAR OWNERSHIP RULES** (EXTREMELY IMPORTANT):
-- **"Me (Family Coordination)" calendar** = YOUR events, say "You have..."
-- **"Me (Personal Tasks)" calendar** = YOUR events, say "You have..."
-- **"Wife (Coordination Needed)" calendar** = Your wife's events, say "Your wife has..." or "Your wife is going to..."
-- **"Son (Parent Logistics)" calendar** = Your son's events, say "Your son has..."
-- **"Daughter (Parent Logistics)" calendar** = Your daughter's events, say "Your daughter has..."
-- **All other calendars** = Family/shared events, use appropriate language
+Examples of the **types** of insights to look for (these are just examples of the categories, not templates to copy):
+- Logical implications from travel/availability constraints
+- Simple responsibility shifts when family members are unavailable  
+- Timing conflicts that need attention or backup plans
+- Preparation reminders for upcoming activities
+- Context about who needs to handle what when others are away
 
-**CROSS-CALENDAR INTELLIGENCE**: Pay attention to calendar ownership and locations:
-- Events from different family members' calendars are for different people
-- Same event type at same time/place but different calendars = different people doing the same thing
-- Example: "Haircut at 3pm on Me calendar + Haircut at 3pm on Son calendar = Both you AND your son have haircuts"
-- Don't assume conflicts unless it's the same person or affects the same resources
-- **CRITICAL**: Always check the calendar owner field in each event and use appropriate pronouns
+**IMPORTANT**: These are example **categories** only. Generate your own unique insights that fit these types of helpful observations, don't copy these patterns.
 
 **TONE GUIDELINES:**
-- Be direct and helpful, not formal
-- Use natural, conversational language
-- Provide actionable guidance
-- Example: "You have two appointments scheduled close to each other, make sure you have a plan to be able to attend both."
-- Example: "You won't be home from your trip before the cleaning crew comes. Make sure you straighten up before you leave."
+- Be personal and familiar, like a trusted family assistant focused on helping YOU
+- Show awareness of family dynamics but always from YOUR perspective
+- Speak like you understand what YOU need to know or handle
+- Be proactive and caring, {} - anticipating YOUR needs
+- Don't give advice about what others should do - focus on YOUR responsibilities
+- Create original insights that fit the situation - don't follow rigid templates
+- Focus on what's genuinely helpful for YOU specifically
+- Keep it punchy and concise - 2-3 sentences maximum, no more
+- Get to the point quickly, don't be wordy or over-explain
 
 **GLYPH SELECTION GUIDE:**
 Choose Unicode characters that represent the content/topic. Examples:
@@ -827,14 +836,14 @@ Choose Unicode characters that represent the content/topic. Examples:
 Respond in this JSON format:
 {{
   "insight": {{
-    "message": "Your direct, helpful insight about the most important thing to address",
+    "message": "Your direct, helpful insight about the most important thing to address (2-3 sentences max)",
     "icon": "📅",
     "context_hash": "placeholder",
     "generated_at": "2024-01-01T00:00:00Z"
   }}
 }}
 
-Focus on THE most important insight. Be specific to THIS calendar, not generic."#,
+Focus on THE most important insight. Be specific to THIS calendar, not generic. Keep it concise and punchy."#,
             current_datetime,
             prefs.timezone,
             current_day,
@@ -847,8 +856,10 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic."
             ctx.total_events,
             ctx.pattern_summary,
             prefs.timezone,
+            childcare_helper_term,
             events_json,
-            additional_context_json
+            additional_context_json,
+            persona_reference
         )
     }
 
@@ -882,13 +893,16 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic."
         }
     }
 
-    fn convert_single_insight_to_correlation(&self, insight: SingleInsight, _events: &[Event]) -> Result<Vec<Correlation>> {
+    async fn convert_single_insight_to_correlation(&self, insight: SingleInsight, _events: &[Event]) -> Result<Vec<Correlation>> {
         debug!("Converting single AI insight to correlation");
+        
+        // Reverse sanitize the insight to add back personal names
+        let personalized_insight = self.reverse_sanitize_insight(&insight.message).await;
         
         let correlation = Correlation {
             id: uuid::Uuid::new_v4().to_string(),
             event_ids: vec![], // Simplified for now
-            insight: insight.message,
+            insight: personalized_insight,
             action_needed: "Review this insight".to_string(),
             urgency_score: 5, // Default medium urgency since we removed urgency scoring
             discovered_at: Utc::now(),
@@ -897,6 +911,187 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic."
         
         debug!("Successfully converted to single correlation");
         Ok(vec![correlation])
+    }
+
+    async fn reverse_sanitize_insight(&self, insight: &str) -> String {
+        let mut name_mappings = HashMap::new();
+        
+        // Strategy 1: Use explicit calendar_owners config if available
+        let has_calendar_owners = {
+            let config = self.config.read();
+            if let Some(calendar_owners) = &config.calendar_owners {
+                for (calendar_id, owner_name) in calendar_owners {
+                    self.add_name_mappings_from_calendar(&mut name_mappings, calendar_id, owner_name);
+                }
+                true
+            } else {
+                false
+            }
+        };
+        
+        if !has_calendar_owners {
+            // Strategy 2: Fallback - extract names from recent calendar events
+            debug!("No calendar_owners config found, using event-based name extraction");
+            if let Ok(name_mappings_from_events) = self.extract_names_from_recent_events().await {
+                name_mappings.extend(name_mappings_from_events);
+            }
+        }
+        
+        // Apply the name replacements with intelligent word boundary matching
+        let mut result = insight.to_string();
+        for (generic_term, real_name) in &name_mappings {
+            // Use whole word replacement to avoid partial matches
+            result = self.replace_whole_words(&result, generic_term, real_name);
+        }
+        
+        // Handle additional patterns that might appear in AI insights
+        result = self.apply_additional_name_patterns(&result, &name_mappings);
+        
+        debug!("Reverse sanitized insight: {} mappings applied, original length {}, final length {}", 
+               name_mappings.len(), insight.len(), result.len());
+        result
+    }
+    
+    /// Add name mappings based on calendar ID patterns
+    fn add_name_mappings_from_calendar(&self, mappings: &mut HashMap<&'static str, String>, calendar_id: &str, owner_name: &str) {
+        let calendar_lower = calendar_id.to_lowercase();
+        
+        // Map based on calendar naming patterns
+        if calendar_lower.contains("wife") || calendar_lower.contains("spouse") {
+            mappings.insert("your wife", owner_name.to_string());
+            mappings.insert("Your wife", owner_name.to_string());
+        } else if calendar_lower.contains("son") {
+            mappings.insert("your son", owner_name.to_string());
+            mappings.insert("Your son", owner_name.to_string());
+        } else if calendar_lower.contains("daughter") {
+            mappings.insert("your daughter", owner_name.to_string());
+            mappings.insert("Your daughter", owner_name.to_string());
+        } else if calendar_lower.contains("husband") || calendar_lower.contains("partner") {
+            mappings.insert("your husband", owner_name.to_string());
+            mappings.insert("Your husband", owner_name.to_string());
+        }
+        
+        // Handle other family relationships that might appear in insights
+        if calendar_lower.contains("child") {
+            mappings.insert("your child", owner_name.to_string());
+            mappings.insert("Your child", owner_name.to_string());
+        }
+    }
+    
+    /// Extract names from recent calendar events as a fallback
+    async fn extract_names_from_recent_events(&self) -> Result<HashMap<&'static str, String>> {
+        let mut mappings = HashMap::new();
+        
+        // Get recent events (last 30 days)
+        let now = Utc::now();
+        let start_time = now - chrono::Duration::days(30);
+        
+        match self.database.get_events_in_range(start_time, now) {
+            Ok(events) => {
+                // Collect calendar owners from recent enriched events
+                let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
+                
+                for enriched in &enriched_events {
+                    if let Some(ref calendar_info) = enriched.calendar_info {
+                        let owner_name = self.sanitizer.extract_calendar_owner_with_config(&calendar_info.calendar_id, None);
+                        
+                        // Only add if we got a meaningful name (not generic terms)
+                        if !owner_name.contains("Unknown") && !owner_name.contains("Person") && owner_name.len() > 1 {
+                            self.add_name_mappings_from_calendar(&mut mappings, &calendar_info.calendar_id, &owner_name);
+                        }
+                    }
+                }
+                
+                debug!("Extracted {} name mappings from recent events", mappings.len());
+            }
+            Err(e) => {
+                debug!("Failed to extract names from recent events: {}", e);
+            }
+        }
+        
+        Ok(mappings)
+    }
+    
+    /// Replace whole words to avoid partial matches
+    fn replace_whole_words(&self, text: &str, pattern: &str, replacement: &str) -> String {
+        // Use regex for word boundary matching, but fallback to simple replace if regex fails
+        match regex::Regex::new(&format!(r"\b{}\b", regex::escape(pattern))) {
+            Ok(re) => re.replace_all(text, replacement).to_string(),
+            Err(_) => text.replace(pattern, replacement),
+        }
+    }
+    
+    /// Apply additional name patterns that might appear in AI insights
+    fn apply_additional_name_patterns(&self, text: &str, name_mappings: &HashMap<&'static str, String>) -> String {
+        let mut result = text.to_string();
+        
+        // Handle possessive forms
+        for (generic_term, real_name) in name_mappings {
+            if generic_term.starts_with("your ") {
+                let possessive_generic = format!("{}'s", generic_term);
+                let possessive_real = format!("{}'s", real_name);
+                result = self.replace_whole_words(&result, &possessive_generic, &possessive_real);
+            }
+        }
+        
+        // Handle additional relationship terms that might be inferred
+        if let Some(wife_name) = name_mappings.get("your wife") {
+            // Handle terms like "she" when referring to wife in context
+            // This is more complex and would need context analysis, so keeping simple for now
+            result = result.replace("your wife's", &format!("{}'s", wife_name));
+        }
+        
+        if let Some(son_name) = name_mappings.get("your son") {
+            result = result.replace("your son's", &format!("{}'s", son_name));
+        }
+        
+        if let Some(daughter_name) = name_mappings.get("your daughter") {
+            result = result.replace("your daughter's", &format!("{}'s", daughter_name));
+        }
+        
+        result
+    }
+    
+    /// Auto-discover and populate calendar owners from existing calendar data
+    pub async fn auto_discover_calendar_owners(&self) -> Result<()> {
+        debug!("Auto-discovering calendar owners from database");
+        
+        // Get recent events to analyze calendar patterns (last 90 days)
+        let now = Utc::now();
+        let start_time = now - chrono::Duration::days(90);
+        
+        let events = self.database.get_events_in_range(start_time, now)?;
+        let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
+        
+        let mut discovered_owners = HashMap::new();
+        
+        for enriched in &enriched_events {
+            if let Some(ref calendar_info) = enriched.calendar_info {
+                // Extract a meaningful name using the enhanced sanitizer
+                let owner_name = self.sanitizer.extract_calendar_owner_with_config(&calendar_info.calendar_id, None);
+                
+                // Only store meaningful names (not generic fallbacks)
+                if !owner_name.contains("Unknown") && !owner_name.contains("Person") && owner_name.len() > 1 {
+                    discovered_owners.insert(calendar_info.calendar_id.clone(), owner_name);
+                }
+            }
+        }
+        
+        if !discovered_owners.is_empty() {
+            debug!("Discovered {} calendar owners: {:?}", discovered_owners.len(), discovered_owners);
+            
+            // Update the config with discovered owners
+            {
+                let mut config = self.config.write();
+                config.update_calendar_owners(discovered_owners);
+            }
+            
+            info!("Auto-discovery populated calendar owners configuration");
+        } else {
+            debug!("No meaningful calendar owners discovered");
+        }
+        
+        Ok(())
     }
 
     fn emergency_fallback_analysis(&self, events: &[Event]) -> Result<Vec<Correlation>> {

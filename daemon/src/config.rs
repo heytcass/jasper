@@ -87,6 +87,12 @@ pub struct PersonalityConfig {
     pub formality: String,
     /// Humor level: "none", "occasional", "frequent"
     pub humor_level: String,
+    /// Assistant persona description
+    pub assistant_persona: String,
+    /// Optional persona reference for personality (e.g., "like Alfred from Batman")
+    pub persona_reference: Option<String>,
+    /// Term to use for childcare helper availability (e.g., "Helper Day", "Nanny Day")
+    pub childcare_helper_term: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +180,9 @@ impl Default for Config {
                 user_title: "Sir".to_string(),
                 formality: "balanced".to_string(),
                 humor_level: "occasional".to_string(),
+                assistant_persona: "trusted family assistant".to_string(),
+                persona_reference: Some("like Alfred from Batman".to_string()),
+                childcare_helper_term: "Helper Day".to_string(),
             },
             google_calendar: Some(GoogleCalendarConfig {
                 enabled: false, // Disabled by default, user must configure
@@ -352,6 +361,16 @@ impl Config {
             self.personality.formality.clone(),
             self.general.timezone.clone()
         )
+    }
+    
+    /// Get enhanced personality configuration for prompt generation
+    pub fn get_personality_config(&self) -> (&PersonalityConfig, &str) {
+        (&self.personality, &self.general.timezone)
+    }
+    
+    /// Update calendar owners mapping from discovered calendar information
+    pub fn update_calendar_owners(&mut self, calendar_owners: HashMap<String, String>) {
+        self.calendar_owners = Some(calendar_owners);
     }
     
     /// Get planning horizon as chrono Duration
