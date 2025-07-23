@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono_tz::Tz;
 
 use crate::frontend_framework::{FrontendRegistry, InsightData};
-use crate::formatters::{WaybarFrontendFormatter, TerminalFrontendFormatter};
+use crate::formatters::{WaybarFrontendFormatter, TerminalFrontendFormatter, GnomeFrontendFormatter};
 
 /// Frontend manager that initializes and manages all available frontend formatters
 pub struct FrontendManager {
@@ -16,6 +16,7 @@ impl FrontendManager {
         // Register built-in formatters
         registry.register(WaybarFrontendFormatter::new());
         registry.register(TerminalFrontendFormatter::new(true)); // With colors
+        registry.register(GnomeFrontendFormatter::new(true)); // Show in panel
         
         Self { registry }
     }
@@ -86,18 +87,20 @@ mod tests {
     fn test_frontend_manager_initialization() {
         let manager = FrontendManager::new();
         
-        // Should have both waybar and terminal formatters
+        // Should have waybar, terminal, and gnome formatters
         assert!(manager.has_frontend("waybar"));
         assert!(manager.has_frontend("terminal"));
+        assert!(manager.has_frontend("gnome"));
         assert!(!manager.has_frontend("nonexistent"));
         
         let frontends = manager.list_frontends();
-        assert_eq!(frontends.len(), 2);
+        assert_eq!(frontends.len(), 3);
         
-        // Check that both frontends are listed
+        // Check that all frontends are listed
         let ids: Vec<&str> = frontends.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"waybar"));
         assert!(ids.contains(&"terminal"));
+        assert!(ids.contains(&"gnome"));
     }
 
     #[test]
@@ -125,6 +128,26 @@ mod tests {
         assert!(result.contains("🤖 Jasper Insights"));
         assert!(result.contains("Test insight message"));
         assert!(result.contains("🧪")); // Test icon
+    }
+
+    #[test]
+    fn test_gnome_formatting() {
+        let manager = FrontendManager::new();
+        let insights = vec![create_test_insight()];
+        
+        let result = manager.format("gnome", &insights, chrono_tz::UTC).unwrap();
+        
+        // Should be valid JSON for GNOME Shell
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.get("text").is_some());
+        assert!(json.get("tooltip").is_some());
+        assert!(json.get("style_class").is_some());
+        assert!(json.get("insights").is_some());
+        
+        // Should contain the test insight data
+        let insights_array = json.get("insights").unwrap().as_array().unwrap();
+        assert_eq!(insights_array.len(), 1);
+        assert!(json.get("tooltip").unwrap().as_str().unwrap().contains("Test insight message"));
     }
 
     #[test]
