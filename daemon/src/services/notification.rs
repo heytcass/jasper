@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::process::Command;
-use tracing::{debug, warn, error};
+use tracing::{debug, warn};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use parking_lot::RwLock;

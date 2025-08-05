@@ -113,6 +113,23 @@ impl TasksContextSource {
         }
     }
     
+    /// Extract tags from title and return cleaned title and tags
+    fn extract_tags_and_clean_title(title: &str) -> (String, Vec<String>) {
+        let mut tags = Vec::new();
+        let mut clean_title = title.to_string();
+        
+        // Simple regex-like parsing for tags
+        let words: Vec<&str> = title.split_whitespace().collect();
+        for word in words {
+            if word.starts_with('#') && word.len() > 1 {
+                tags.push(word[1..].to_string());
+                clean_title = clean_title.replace(word, "").trim().to_string();
+            }
+        }
+        
+        (clean_title, tags)
+    }
+    
     /// Fetch tasks from the configured source
     async fn fetch_tasks(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Task>> {
         match self.source_type {
@@ -260,18 +277,8 @@ impl TasksContextSource {
                 
                 let priority = if status_char == '!' { 8 } else { 5 };
                 
-                // Extract tags from title (look for #tag patterns)
-                let mut tags = Vec::new();
-                let mut clean_title = title.to_string();
-                
-                // Simple regex-like parsing for tags
-                let words: Vec<&str> = title.split_whitespace().collect();
-                for word in words {
-                    if word.starts_with('#') && word.len() > 1 {
-                        tags.push(word[1..].to_string());
-                        clean_title = clean_title.replace(word, "").trim().to_string();
-                    }
-                }
+                // Extract tags from title and clean it
+                let (clean_title, tags) = Self::extract_tags_and_clean_title(title);
                 
                 tasks.push(Task {
                     id: format!("local_{}", task_id),
@@ -472,17 +479,8 @@ impl TasksContextSource {
                 // Extract due dates from common patterns
                 let due_date = self.extract_due_date_from_title(title);
                 
-                // Extract tags from title (look for #tag patterns)
-                let mut tags = Vec::new();
-                let mut clean_title = title.to_string();
-                
-                let words: Vec<&str> = title.split_whitespace().collect();
-                for word in words {
-                    if word.starts_with('#') && word.len() > 1 {
-                        tags.push(word[1..].to_string());
-                        clean_title = clean_title.replace(word, "").trim().to_string();
-                    }
-                }
+                // Extract tags from title and clean it
+                let (clean_title, mut tags) = Self::extract_tags_and_clean_title(title);
                 
                 // Add file context as tag
                 tags.push(format!("file:{}", file_name.replace(".md", "")));

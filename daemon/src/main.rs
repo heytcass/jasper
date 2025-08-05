@@ -12,7 +12,6 @@ mod data_sanitizer;
 mod api_manager;
 mod google_calendar;
 mod calendar_sync;
-mod test_calendar_integration;
 mod waybar_formatter;
 mod http_utils;
 mod commands;

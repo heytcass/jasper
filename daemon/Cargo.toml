@@ -15,7 +15,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
 toml = { workspace = true }
-notify = { workspace = true }
 dirs = { workspace = true }
 zbus = { workspace = true }
 clap = { workspace = true }
@@ -26,7 +25,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.8"
-age = { workspace = true }
 oauth2 = { workspace = true }
 parking_lot = { workspace = true }
 uuid = { workspace = true }
