@@ -264,19 +264,29 @@ impl Config {
             }
         }
         
+        // Validate configuration
+        config.validate()?;
+        
         Ok(Arc::new(RwLock::new(config)))
     }
     
     /// Apply SOPS secrets to override config values
     fn apply_sops_secrets(&mut self, secrets: &SopsSecrets) {
         // Override AI API key
-        if let Some(claude_api_key) = secrets.get("claude_api_key") {
-            debug!("Using Claude API key from SOPS");
-            self.ai.api_key = Some(claude_api_key.clone());
+        if let Some(anthropic_api_key) = secrets.get("services.anthropic_api_key") {
+            debug!("Using Anthropic API key from SOPS");
+            self.ai.api_key = Some(anthropic_api_key.clone());
         }
         
-        // Override Google Calendar client secret
-        if let Some(google_client_secret) = secrets.get("google_calendar_client_secret") {
+        // Override Google Calendar credentials
+        if let Some(google_client_id) = secrets.get("services.google_calendar.client_id") {
+            debug!("Using Google Calendar client ID from SOPS");
+            if let Some(ref mut google_config) = self.google_calendar {
+                google_config.client_id = google_client_id.clone();
+            }
+        }
+        
+        if let Some(google_client_secret) = secrets.get("services.google_calendar.client_secret") {
             debug!("Using Google Calendar client secret from SOPS");
             if let Some(ref mut google_config) = self.google_calendar {
                 google_config.client_secret = google_client_secret.clone();
@@ -333,16 +343,18 @@ impl Config {
         Ok(config_dir.join("config.toml"))
     }
     
-    pub fn get_database_path(&self) -> PathBuf {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".local/share"))
-            .join("jasper-companion")
-            .join("app_data.db")
+    pub fn get_database_path(&self) -> Result<PathBuf> {
+        let data_dir = dirs::data_local_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?;
+        
+        Ok(data_dir.join("jasper-companion").join("app_data.db"))
     }
     
     pub fn get_data_dir() -> Result<PathBuf> {
         let data_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".local/share"))
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?
             .join("jasper-companion");
         
         Ok(data_dir)
@@ -398,6 +410,90 @@ impl Config {
     pub fn get_timezone(&self) -> chrono_tz::Tz {
         self.general.timezone.parse::<chrono_tz::Tz>()
             .unwrap_or(chrono_tz::UTC)
+    }
+    
+    /// Validate configuration values
+    fn validate(&self) -> Result<()> {
+        // Validate timezone
+        if let Err(_) = self.general.timezone.parse::<chrono_tz::Tz>() {
+            return Err(anyhow::anyhow!("Invalid timezone: {}", self.general.timezone));
+        }
+        
+        // Validate planning horizon
+        if self.general.planning_horizon_days > 365 {
+            return Err(anyhow::anyhow!(
+                "Planning horizon cannot exceed 365 days, got: {}", 
+                self.general.planning_horizon_days
+            ));
+        }
+        
+        if self.general.planning_horizon_days == 0 {
+            return Err(anyhow::anyhow!("Planning horizon must be at least 1 day"));
+        }
+        
+        // Validate AI temperature
+        if self.ai.temperature < 0.0 || self.ai.temperature > 2.0 {
+            return Err(anyhow::anyhow!(
+                "AI temperature must be between 0.0 and 2.0, got: {}", 
+                self.ai.temperature
+            ));
+        }
+        
+        // Validate AI max tokens
+        if self.ai.max_tokens < 100 || self.ai.max_tokens > 32000 {
+            return Err(anyhow::anyhow!(
+                "AI max_tokens must be between 100 and 32000, got: {}", 
+                self.ai.max_tokens
+            ));
+        }
+        
+        // Validate quiet hours format
+        if let Err(_) = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_start, "%H:%M") {
+            return Err(anyhow::anyhow!(
+                "Invalid quiet_hours_start format '{}', expected HH:MM", 
+                self.insights.quiet_hours_start
+            ));
+        }
+        
+        if let Err(_) = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_end, "%H:%M") {
+            return Err(anyhow::anyhow!(
+                "Invalid quiet_hours_end format '{}', expected HH:MM", 
+                self.insights.quiet_hours_end
+            ));
+        }
+        
+        // Validate max insights per day
+        if self.insights.max_insights_per_day == 0 || self.insights.max_insights_per_day > 50 {
+            return Err(anyhow::anyhow!(
+                "max_insights_per_day must be between 1 and 50, got: {}", 
+                self.insights.max_insights_per_day
+            ));
+        }
+        
+        // Validate Google Calendar configuration if present
+        if let Some(ref gc) = self.google_calendar {
+            if gc.enabled {
+                if gc.client_id.is_empty() {
+                    return Err(anyhow::anyhow!("Google Calendar enabled but client_id is empty"));
+                }
+                if gc.client_secret.is_empty() {
+                    return Err(anyhow::anyhow!("Google Calendar enabled but client_secret is empty"));
+                }
+                if gc.redirect_uri.is_empty() {
+                    return Err(anyhow::anyhow!("Google Calendar enabled but redirect_uri is empty"));
+                }
+                
+                // Validate redirect URI format
+                if !gc.redirect_uri.starts_with("http://") && !gc.redirect_uri.starts_with("https://") {
+                    return Err(anyhow::anyhow!(
+                        "Google Calendar redirect_uri must be a valid HTTP(S) URL: {}", 
+                        gc.redirect_uri
+                    ));
+                }
+            }
+        }
+        
+        Ok(())
     }
     
     /// Get Obsidian configuration
