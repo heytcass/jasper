@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::collections::HashSet;
 use parking_lot::Mutex;
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ pub type Database = Arc<DatabaseInner>;
 
 pub struct DatabaseInner {
     connection: Mutex<Connection>,
+    db_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,12 +73,75 @@ impl DatabaseInner {
 
         let db = Arc::new(DatabaseInner {
             connection: Mutex::new(connection),
+            db_path: db_path.clone(),
         });
 
         db.run_migrations().await?;
         info!("Database initialized at {:?}", db_path);
 
         Ok(db)
+    }
+    
+    /// Recover from database connection issues by reopening the connection
+    fn recover_connection(&self) -> Result<()> {
+        warn!("Attempting to recover database connection");
+        
+        let new_connection = Connection::open(&self.db_path)
+            .with_context(|| format!("Failed to reopen database: {:?}", self.db_path))?;
+            
+        // Configure the connection with the same settings
+        new_connection.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = 1000000;
+             PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;"
+        ).context("Failed to configure recovered database connection")?;
+        
+        let mut conn_guard = self.connection.lock();
+        *conn_guard = new_connection;
+        
+        info!("Database connection recovered successfully");
+        Ok(())
+    }
+    
+    /// Execute a database operation with automatic retry on connection failure
+    fn with_connection_retry<F, R>(&self, operation: F) -> Result<R>
+    where
+        F: Fn(&Connection) -> Result<R> + Copy,
+    {
+        // First attempt
+        {
+            let conn = self.connection.lock();
+            match operation(&*conn) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    // Check if this is a connection-related error
+                    if self.is_connection_error(&e) {
+                        warn!("Database connection error detected: {}", e);
+                        drop(conn); // Release the mutex before recovery
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        
+        // Attempt recovery
+        self.recover_connection()?;
+        
+        // Retry the operation
+        let conn = self.connection.lock();
+        operation(&*conn)
+    }
+    
+    /// Check if an error indicates a connection issue
+    fn is_connection_error(&self, error: &anyhow::Error) -> bool {
+        let error_msg = error.to_string().to_lowercase();
+        error_msg.contains("database is locked") ||
+        error_msg.contains("disk i/o error") ||
+        error_msg.contains("database disk image is malformed") ||
+        error_msg.contains("not a database")
     }
 
     async fn run_migrations(&self) -> Result<()> {
@@ -322,19 +386,26 @@ impl DatabaseInner {
             return Ok(existing);
         }
         
-        // Build parameterized query for bulk lookup
-        let placeholders: String = (0..source_ids.len()).map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!("SELECT source_id FROM events WHERE source_id IN ({})", placeholders);
+        // Use safe batch processing instead of dynamic SQL construction
+        // Process in chunks to avoid hitting SQLite parameter limits
+        const BATCH_SIZE: usize = 999; // SQLite default parameter limit is 999
         
-        let mut stmt = conn.prepare(&query)?;
-        let params: Vec<&dyn rusqlite::ToSql> = source_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        
-        let rows = stmt.query_map(&params[..], |row| {
-            Ok(row.get::<_, String>(0)?)
-        })?;
-        
-        for row in rows {
-            existing.insert(row?);
+        for chunk in source_ids.chunks(BATCH_SIZE) {
+            // Build parameterized query with exact number of placeholders
+            let placeholders = "?,".repeat(chunk.len());
+            let placeholders = &placeholders[..placeholders.len()-1]; // Remove trailing comma
+            let query = format!("SELECT source_id FROM events WHERE source_id IN ({})", placeholders);
+            
+            let mut stmt = conn.prepare(&query)?;
+            let params: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            
+            let rows = stmt.query_map(&params[..], |row| {
+                Ok(row.get::<_, String>(0)?)
+            })?;
+            
+            for row in rows {
+                existing.insert(row?);
+            }
         }
         
         Ok(existing)
@@ -376,9 +447,76 @@ impl DatabaseInner {
 
 
     
-    pub fn execute_sql(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<usize> {
+    /// Delete test events from the database (for cleanup operations)
+    pub fn delete_test_events(&self) -> Result<usize> {
         let conn = self.connection.lock();
-        Ok(conn.execute(sql, params)?)
+        let count = conn.execute(
+            "DELETE FROM events WHERE calendar_id IN (
+                SELECT id FROM calendars WHERE account_id IN (
+                    SELECT id FROM accounts WHERE service_name = ?
+                )
+            )", 
+            [&"test" as &dyn rusqlite::ToSql]
+        )?;
+        Ok(count)
+    }
+    
+    /// Delete test calendars from the database (for cleanup operations)
+    pub fn delete_test_calendars(&self) -> Result<usize> {
+        let conn = self.connection.lock();
+        let count = conn.execute(
+            "DELETE FROM calendars WHERE account_id IN (
+                SELECT id FROM accounts WHERE service_name = ?
+            )", 
+            [&"test" as &dyn rusqlite::ToSql]
+        )?;
+        Ok(count)
+    }
+    
+    /// Delete test accounts from the database (for cleanup operations)
+    pub fn delete_test_accounts(&self) -> Result<usize> {
+        let conn = self.connection.lock();
+        let count = conn.execute(
+            "DELETE FROM accounts WHERE service_name = ?", 
+            [&"test" as &dyn rusqlite::ToSql]
+        )?;
+        Ok(count)
+    }
+    
+    /// Insert test account (for testing purposes only)
+    pub fn insert_test_account(&self, timestamp: i64) -> Result<()> {
+        let conn = self.connection.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO accounts (id, service_name, user_identifier, encrypted_refresh_token, last_sync_timestamp)
+             VALUES (1, ?, ?, ?, ?)",
+            [&1i64 as &dyn rusqlite::ToSql, &"test", &"test_user", &"dummy_token", &timestamp]
+        )?;
+        Ok(())
+    }
+    
+    /// Insert test calendar (for testing purposes only) 
+    pub fn insert_test_calendar(&self, id: i64, calendar_id: &str, name: &str, calendar_type: &str, color: &str) -> Result<()> {
+        let conn = self.connection.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO calendars (id, account_id, calendar_id, calendar_name, calendar_type, color)
+             VALUES (?, 1, ?, ?, ?, ?)",
+            [&id as &dyn rusqlite::ToSql, &calendar_id, &name, &calendar_type, &color]  
+        )?;
+        Ok(())
+    }
+    
+    /// Insert test event (for testing purposes only)
+    pub fn insert_test_event(&self, source_id: &str, calendar_id: i64, title: &str, description: &str, 
+                           start_time: i64, end_time: i64, event_type: &str) -> Result<()> {
+        let conn = self.connection.lock();
+        conn.execute(
+            "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time, 
+                               location, event_type, participants, raw_data_json, is_all_day)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, '{}', 0)",
+            [&source_id as &dyn rusqlite::ToSql, &calendar_id, &title, &description, 
+             &start_time, &end_time, &event_type]
+        )?;
+        Ok(())
     }
 
     /// Create or update calendar record
@@ -465,5 +603,154 @@ impl DatabaseInner {
             id if id.contains("holiday") => "#9C27B0", // Purple
             _ => "#757575", // Grey for unknown
         }
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use std::collections::HashSet;
+    
+    async fn create_test_database() -> Database {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("test_{}.db", uuid::Uuid::new_v4()));
+        DatabaseInner::new(&db_path).await.expect("Failed to create test database")
+    }
+    
+    #[tokio::test]
+    async fn test_sql_injection_protection_get_existing_source_ids() {
+        let database = create_test_database().await;
+        
+        // Insert some test data
+        database.insert_test_account(chrono::Utc::now().timestamp()).unwrap();
+        database.insert_test_calendar(1, "test", "Test Calendar", "test", "#FF0000").unwrap();
+        database.insert_test_event("normal_event", 1, "Normal Event", "Description", 
+                                 chrono::Utc::now().timestamp(), 
+                                 chrono::Utc::now().timestamp() + 3600, "meeting").unwrap();
+        
+        // Test with malicious SQL injection attempts
+        let malicious_inputs = vec![
+            "'; DROP TABLE events; --",
+            "' OR 1=1 --",
+            "' UNION SELECT * FROM events --", 
+            "'; DELETE FROM events WHERE 1=1; --",
+            "' OR 'x'='x",
+            "test'; INSERT INTO events (source_id, calendar_id, title) VALUES ('malicious', 1, 'hacked'); --",
+        ];
+        
+        for malicious_input in malicious_inputs {
+            let source_ids = vec![malicious_input.to_string()];
+            
+            // This should not cause SQL injection and should return safely
+            let result = database.get_existing_source_ids(&source_ids);
+            
+            // The function should either:
+            // 1. Return an empty set (no matching records)
+            // 2. Return an error (but not crash)
+            // 3. Never execute the malicious SQL
+            match result {
+                Ok(existing) => {
+                    // Should be empty since malicious input won't match real source_ids
+                    assert!(existing.is_empty(), 
+                           "Malicious input '{}' should not match any records", malicious_input);
+                }
+                Err(_) => {
+                    // Errors are acceptable as long as no injection occurred
+                    // The important thing is that we don't crash or execute malicious SQL
+                }
+            }
+        }
+        
+        // Verify our normal data is still intact (not dropped by injection)
+        let normal_ids = vec!["normal_event".to_string()];
+        let existing = database.get_existing_source_ids(&normal_ids).unwrap();
+        assert_eq!(existing.len(), 1);
+        assert!(existing.contains("normal_event"));
+    }
+    
+    #[tokio::test]
+    async fn test_parameterized_queries_prevent_injection() {
+        let database = create_test_database().await;
+        
+        // Set up test data
+        database.insert_test_account(chrono::Utc::now().timestamp()).unwrap();
+        database.insert_test_calendar(1, "test", "Test Calendar", "test", "#FF0000").unwrap();
+        
+        // Test that our safe methods properly escape parameters
+        let malicious_title = "'; DROP TABLE events; --";
+        let malicious_description = "' OR 1=1; DELETE FROM calendars; --";
+        
+        // This should safely insert the malicious strings as literal text
+        let result = database.insert_test_event(
+            "safe_test", 1, malicious_title, malicious_description,
+            chrono::Utc::now().timestamp(),
+            chrono::Utc::now().timestamp() + 3600,
+            "meeting"
+        );
+        
+        assert!(result.is_ok(), "Parameterized insert should succeed");
+        
+        // Verify the malicious strings were stored as literal text (not executed as SQL)
+        let events = database.get_events_in_range(
+            chrono::Utc::now() - chrono::Duration::hours(1),
+            chrono::Utc::now() + chrono::Duration::hours(2)
+        ).unwrap();
+        
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title.as_ref().unwrap(), malicious_title);
+        assert_eq!(events[0].description.as_ref().unwrap(), malicious_description);
+    }
+    
+    #[tokio::test]
+    async fn test_batch_processing_limits() {
+        let database = create_test_database().await;
+        
+        // Test with a very large number of source IDs to ensure we don't hit SQL limits
+        let large_source_ids: Vec<String> = (0..2000)
+            .map(|i| format!("source_{}", i))
+            .collect();
+        
+        // This should handle the large batch safely without hitting SQLite parameter limits
+        let result = database.get_existing_source_ids(&large_source_ids);
+        assert!(result.is_ok(), "Large batch should be handled safely");
+        
+        let existing = result.unwrap();
+        assert!(existing.is_empty(), "No existing records should be found");
+    }
+    
+    #[tokio::test]
+    async fn test_safe_cleanup_methods() {
+        let database = create_test_database().await;
+        
+        // Set up test data
+        database.insert_test_account(chrono::Utc::now().timestamp()).unwrap();
+        database.insert_test_calendar(1, "test", "Test Calendar", "test", "#FF0000").unwrap();
+        database.insert_test_event("test_event", 1, "Test", "Description",  
+                                 chrono::Utc::now().timestamp(),
+                                 chrono::Utc::now().timestamp() + 3600, "meeting").unwrap();
+        
+        // Verify data exists
+        let events_before = database.get_events_in_range(
+            chrono::Utc::now() - chrono::Duration::hours(1),
+            chrono::Utc::now() + chrono::Duration::hours(2)
+        ).unwrap();
+        assert_eq!(events_before.len(), 1);
+        
+        // Test safe cleanup methods
+        let events_deleted = database.delete_test_events().unwrap();
+        assert_eq!(events_deleted, 1);
+        
+        let calendars_deleted = database.delete_test_calendars().unwrap();  
+        assert_eq!(calendars_deleted, 1);
+        
+        let accounts_deleted = database.delete_test_accounts().unwrap();
+        assert_eq!(accounts_deleted, 1);
+        
+        // Verify cleanup worked
+        let events_after = database.get_events_in_range(
+            chrono::Utc::now() - chrono::Duration::hours(1), 
+            chrono::Utc::now() + chrono::Duration::hours(2)
+        ).unwrap();
+        assert_eq!(events_after.len(), 0);
     }
 }

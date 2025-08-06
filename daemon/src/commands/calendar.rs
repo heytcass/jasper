@@ -161,16 +161,14 @@ impl Command for CleanDatabaseCommand {
     async fn execute(&mut self, context: &CommandContext) -> Result<()> {
         println!("🗑️  Cleaning test data from database...");
         
-        // Remove test events (from test calendars 1, 2, 3)
-        let events_deleted = context.database.execute_sql("DELETE FROM events WHERE calendar_id IN (1, 2, 3)", &[])?;
+        // Remove test data using safe methods
+        let events_deleted = context.database.delete_test_events()?;
         println!("   Removed {} test events", events_deleted);
         
-        // Remove test calendars
-        let calendars_deleted = context.database.execute_sql("DELETE FROM calendars WHERE id IN (1, 2, 3)", &[])?;
+        let calendars_deleted = context.database.delete_test_calendars()?;
         println!("   Removed {} test calendars", calendars_deleted);
         
-        // Remove test account
-        let accounts_deleted = context.database.execute_sql("DELETE FROM accounts WHERE service_name = 'test'", &[])?;
+        let accounts_deleted = context.database.delete_test_accounts()?;
         println!("   Removed {} test accounts", accounts_deleted);
         
         println!("\n📊 Database cleanup summary:");

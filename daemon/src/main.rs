@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
     info!("Configuration loaded successfully");
 
     // Initialize database
-    let db_path = config.read().get_database_path();
+    let db_path = config.read().get_database_path()?;
     let database = DatabaseInner::new(&db_path).await?;
     info!("Database initialized");
 

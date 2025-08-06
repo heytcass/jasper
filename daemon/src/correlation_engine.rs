@@ -535,7 +535,7 @@ impl CorrelationEngine {
         
         // Create a comprehensive hash of all context sources for caching
         
-        // Check if context has changed meaningfully
+        // Check if context has changed meaningfully to avoid unnecessary API calls
         if !self.should_generate_new_insight("", &events, &additional_context) {
             // Return the last insight if context hasn't changed significantly
             if let Some(last_state) = self.last_context_state.read().as_ref() {

@@ -62,32 +62,60 @@ impl SopsSecrets {
         }
     }
     
-    /// Parse YAML content into secrets map
+    /// Parse YAML content into secrets map with support for nested structures
     fn parse_yaml(yaml_content: &str) -> Result<Self> {
         let mut secrets = HashMap::new();
+        let mut current_context = Vec::new();
         
-        // Simple YAML parsing for key-value pairs
         for line in yaml_content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with("sops:") {
+            let line = line.trim_end();
+            if line.trim().is_empty() || line.trim().starts_with('#') || line.trim().starts_with("sops:") {
                 continue;
             }
             
-            if let Some(colon_pos) = line.find(':') {
-                let key = line[..colon_pos].trim();
-                let value = line[colon_pos + 1..].trim();
+            // Calculate indentation level
+            let indent_level = line.len() - line.trim_start().len();
+            let line_content = line.trim();
+            
+            if let Some(colon_pos) = line_content.find(':') {
+                let key = line_content[..colon_pos].trim();
+                let value = line_content[colon_pos + 1..].trim();
                 
-                // Remove quotes if present
-                let value = if value.starts_with('"') && value.ends_with('"') {
-                    &value[1..value.len() - 1]
+                // Adjust context based on indentation
+                let expected_level = current_context.len() * 4; // Assuming 4 spaces per level
+                if indent_level < expected_level {
+                    // Pop context until we match indentation
+                    while current_context.len() > indent_level / 4 {
+                        current_context.pop();
+                    }
+                } else if indent_level == expected_level + 4 {
+                    // We're one level deeper, context should already be set
+                }
+                
+                if value.is_empty() {
+                    // This is a section header, add to context
+                    current_context.truncate(indent_level / 4);
+                    current_context.push(key.to_string());
                 } else {
-                    value
-                };
-                
-                // Skip sops metadata fields
-                if !key.starts_with("sops") && !key.contains("lastmodified") && !key.contains("mac") {
-                    secrets.insert(key.to_string(), value.to_string());
-                    debug!("Loaded secret: {}", key);
+                    // This is a key-value pair
+                    let mut full_key = current_context.join(".");
+                    if !full_key.is_empty() {
+                        full_key.push('.');
+                    }
+                    full_key.push_str(key);
+                    
+                    // Remove quotes if present
+                    let value = if value.starts_with('"') && value.ends_with('"') {
+                        &value[1..value.len() - 1]
+                    } else {
+                        value
+                    };
+                    
+                    // Skip sops metadata fields
+                    if !full_key.starts_with("sops") && !full_key.contains("lastmodified") && !full_key.contains("mac") {
+                        secrets.insert(full_key.clone(), value.to_string());
+                        debug!("Loaded secret: {}", full_key);
+                    }
                 }
             }
         }

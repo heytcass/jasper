@@ -153,30 +153,45 @@ impl CircuitBreaker {
     }
     
     pub fn is_open(&self) -> bool {
-        let failure_count = self.failure_count.load(std::sync::atomic::Ordering::Relaxed);
+        let failure_count = self.failure_count.load(std::sync::atomic::Ordering::Acquire);
         
         if failure_count < self.failure_threshold {
             return false;
         }
         
-        let last_failure = self.last_failure.lock().unwrap();
-        if let Some(last_failure_time) = *last_failure {
-            last_failure_time.elapsed() < self.timeout
-        } else {
-            false
+        match self.last_failure.lock() {
+            Ok(last_failure) => {
+                if let Some(last_failure_time) = *last_failure {
+                    last_failure_time.elapsed() < self.timeout
+                } else {
+                    false
+                }
+            }
+            Err(poisoned) => {
+                tracing::warn!("Circuit breaker mutex poisoned, resetting state");
+                // Reset the poisoned mutex and assume circuit is closed
+                *poisoned.into_inner() = None;
+                false
+            }
         }
     }
     
     pub fn record_success(&self) {
-        self.failure_count.store(0, std::sync::atomic::Ordering::Relaxed);
-        let mut last_failure = self.last_failure.lock().unwrap();
-        *last_failure = None;
+        self.failure_count.store(0, std::sync::atomic::Ordering::Release);
+        if let Ok(mut last_failure) = self.last_failure.lock() {
+            *last_failure = None;
+        } else {
+            tracing::warn!("Circuit breaker mutex poisoned during success record");
+        }
     }
     
     pub fn record_failure(&self) {
-        self.failure_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut last_failure = self.last_failure.lock().unwrap();
-        *last_failure = Some(std::time::Instant::now());
+        self.failure_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if let Ok(mut last_failure) = self.last_failure.lock() {
+            *last_failure = Some(std::time::Instant::now());
+        } else {
+            tracing::warn!("Circuit breaker mutex poisoned during failure record");
+        }
     }
     
     pub async fn call<F, Fut, T>(&self, operation: F, operation_name: &str) -> JasperResult<T>
