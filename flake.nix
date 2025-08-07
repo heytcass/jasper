@@ -106,5 +106,23 @@
           
           passthru.extensionUuid = "jasper@tom.local";
         };
+        
+        packages.gnome-extension-dev = pkgs.stdenv.mkDerivation {
+          pname = "jasper-companion-gnome-extension-dev";
+          version = "0.2.0-dev-${self.shortRev or "dirty"}";
+          
+          src = ./gnome-extension;
+          
+          installPhase = ''
+            mkdir -p $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local
+            cp -r * $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local/
+            
+            # Update metadata.json with development UUID
+            ${pkgs.jq}/bin/jq '.uuid = "jasper-dev-v2@tom.local" | .name = "Jasper AI Insights (Development)" | .description = "Development version - AI-generated calendar insights"' metadata.json > \
+              $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local/metadata.json
+          '';
+          
+          passthru.extensionUuid = "jasper-dev-v2@tom.local";
+        };
       });
 }
