@@ -43,29 +43,54 @@ export default class JasperExtension extends Extension.Extension {
     
     _refreshInsights() {
         try {
-            const [success, stdout] = GLib.spawn_command_line_sync(
+            const [success, stdout, stderr] = GLib.spawn_command_line_sync(
                 'gdbus call --session --dest org.personal.CompanionAI --object-path /org/personal/CompanionAI/Companion --method org.personal.CompanionAI.Companion1.GetFormattedInsights "gnome"'
             );
             
-            if (success && stdout) {
+            if (success && stdout && stdout.length > 0) {
                 const output = new TextDecoder().decode(stdout).trim();
-                // Extract JSON from D-Bus response: ("JSON_STRING",)
-                const match = output.match(/^\("(.+)"\,\)$/s);
+                
+                // Try multiple regex patterns to match D-Bus response formats
+                let jsonStr = null;
+                
+                // Pattern 1: ("JSON_STRING",)
+                let match = output.match(/^\("(.*)"\s*,?\s*\)$/s);
                 if (match) {
-                    const jsonStr = match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-                    const data = JSON.parse(jsonStr);
+                    jsonStr = match[1];
+                } else {
+                    // Pattern 2: (JSON_STRING,)
+                    match = output.match(/^\((.*),?\s*\)$/s);
+                    if (match) {
+                        jsonStr = match[1];
+                    } else {
+                        // Pattern 3: Just the JSON string
+                        if (output.startsWith('{') && output.endsWith('}')) {
+                            jsonStr = output;
+                        }
+                    }
+                }
+                
+                if (jsonStr) {
+                    // Clean up escaped quotes and backslashes
+                    jsonStr = jsonStr.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                     
-                    if (data.text) {
-                        this._label.set_text(data.text);
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        
+                        if (data.text) {
+                            this._label.set_text(data.text);
+                        }
+                        if (data.tooltip && this._indicator) {
+                            this._indicator.set_tooltip_text(data.tooltip);
+                        }
+                        return;
+                    } catch (parseError) {
+                        console.warn('[Jasper] JSON parse failed:', parseError.message);
                     }
-                    if (data.tooltip && this._indicator) {
-                        this._indicator.set_tooltip_text(data.tooltip);
-                    }
-                    return;
                 }
             }
         } catch (error) {
-            // Silent fallback
+            console.warn('[Jasper] D-Bus call failed:', error.message);
         }
         
         // Fallback
