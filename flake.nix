@@ -114,15 +114,15 @@
           src = ./gnome-extension;
           
           installPhase = ''
-            mkdir -p $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local
-            cp -r * $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local/
+            mkdir -p $out/share/gnome-shell/extensions/jasper-dev-v3@tom.local
+            cp -r * $out/share/gnome-shell/extensions/jasper-dev-v3@tom.local/
             
             # Update metadata.json with development UUID
-            ${pkgs.jq}/bin/jq '.uuid = "jasper-dev-v2@tom.local" | .name = "Jasper AI Insights (Development)" | .description = "Development version - AI-generated calendar insights"' metadata.json > \
-              $out/share/gnome-shell/extensions/jasper-dev-v2@tom.local/metadata.json
+            ${pkgs.jq}/bin/jq '.uuid = "jasper-dev-v3@tom.local" | .name = "Jasper AI Insights (Development)" | .description = "Development version - AI-generated calendar insights"' metadata.json > \
+              $out/share/gnome-shell/extensions/jasper-dev-v3@tom.local/metadata.json
           '';
           
-          passthru.extensionUuid = "jasper-dev-v2@tom.local";
+          passthru.extensionUuid = "jasper-dev-v3@tom.local";
         };
       });
 }

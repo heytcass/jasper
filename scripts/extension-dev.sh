@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Extension UUIDs
-EXTENSION_DEV_UUID="jasper-dev-v2@tom.local"
+EXTENSION_DEV_UUID="jasper-dev-v3@tom.local"
 EXTENSION_PROD_UUID="jasper@tom.local"
 
 # Colors for output
