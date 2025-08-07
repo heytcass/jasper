@@ -97,11 +97,11 @@
           src = ./gnome-extension;
           
           installPhase = ''
-            mkdir -p $out/share/gnome-shell/extensions/jasper-companion@personal.org
-            cp -r * $out/share/gnome-shell/extensions/jasper-companion@personal.org/
+            mkdir -p $out/share/gnome-shell/extensions/jasper@tom.local
+            cp -r * $out/share/gnome-shell/extensions/jasper@tom.local/
           '';
           
-          passthru.extensionUuid = "jasper-companion@personal.org";
+          passthru.extensionUuid = "jasper@tom.local";
         };
         
         # NixOS module for system integration

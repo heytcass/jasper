@@ -19,6 +19,12 @@ in
       type = types.str;
       description = "User under which Jasper Companion runs";
     };
+    
+    enableGnomeExtension = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Enable the GNOME Shell extension";
+    };
   };
   
   config = mkIf cfg.enable {
@@ -47,6 +53,7 @@ in
     
     # D-Bus service file for user session
     # This will be included in the package
-    environment.systemPackages = [ cfg.package ];
+    environment.systemPackages = [ cfg.package ] ++ 
+      (optionals cfg.enableGnomeExtension [ pkgs.jasper-companion-gnome-extension ]);
   };
 }

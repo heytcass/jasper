@@ -1,5 +1,5 @@
 {
-  "uuid": "jasper-insights-v3@tom.local",
+  "uuid": "jasper@tom.local",
   "name": "Jasper AI Insights",
   "description": "Display AI-generated calendar insights in GNOME Shell panel",
   "shell-version": [
