@@ -8,7 +8,10 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+    {
+      # NixOS module for system integration (must be outside eachDefaultSystem)
+      nixosModules.default = import ./module.nix;
+    } // flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
@@ -103,8 +106,5 @@
           
           passthru.extensionUuid = "jasper@tom.local";
         };
-        
-        # NixOS module for system integration
-        nixosModules.default = import ./module.nix;
       });
 }

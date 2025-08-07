@@ -4,6 +4,10 @@ with lib;
 
 let
   cfg = config.services.jasperCompanion;
+  
+  # Get the flake's packages - this needs to be passed in by the flake
+  jasperPackages = cfg.flakePackages or {};
+  gnomeExtensionPackage = jasperPackages.gnome-extension or null;
 in
 {
   options.services.jasperCompanion = {
@@ -24,6 +28,12 @@ in
       type = types.bool;
       default = false;
       description = "Enable the GNOME Shell extension";
+    };
+    
+    flakePackages = mkOption {
+      type = types.attrs;
+      default = {};
+      description = "Flake packages passed from the flake";
     };
   };
   
@@ -54,6 +64,6 @@ in
     # D-Bus service file for user session
     # This will be included in the package
     environment.systemPackages = [ cfg.package ] ++ 
-      (optionals cfg.enableGnomeExtension [ pkgs.jasper-companion-gnome-extension ]);
+      (optionals (cfg.enableGnomeExtension && gnomeExtensionPackage != null) [ gnomeExtensionPackage ]);
   };
 }

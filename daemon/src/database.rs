@@ -489,7 +489,7 @@ impl DatabaseInner {
         conn.execute(
             "INSERT OR REPLACE INTO accounts (id, service_name, user_identifier, encrypted_refresh_token, last_sync_timestamp)
              VALUES (1, ?, ?, ?, ?)",
-            [&1i64 as &dyn rusqlite::ToSql, &"test", &"test_user", &"dummy_token", &timestamp]
+            [&"test" as &dyn rusqlite::ToSql, &"test_user", &"dummy_token", &timestamp]
         )?;
         Ok(())
     }
@@ -510,9 +510,8 @@ impl DatabaseInner {
                            start_time: i64, end_time: i64, event_type: &str) -> Result<()> {
         let conn = self.connection.lock();
         conn.execute(
-            "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time, 
-                               location, event_type, participants, raw_data_json, is_all_day)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, '{}', 0)",
+            "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time, event_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             [&source_id as &dyn rusqlite::ToSql, &calendar_id, &title, &description, 
              &start_time, &end_time, &event_type]
         )?;
