@@ -49,54 +49,55 @@ export default class JasperExtension extends Extension.Extension {
             
             if (success && stdout && stdout.length > 0) {
                 const output = new TextDecoder().decode(stdout).trim();
+                console.log('[Jasper] D-Bus output:', JSON.stringify(output));
                 
-                // Try multiple regex patterns to match D-Bus response formats
+                // D-Bus returns: ("JSON_STRING",)
+                // Extract the JSON string from the D-Bus tuple format
                 let jsonStr = null;
                 
-                // Pattern 1: ("JSON_STRING",)
-                let match = output.match(/^\("(.*)"\s*,?\s*\)$/s);
+                // Pattern: ("JSON_STRING",) - capture everything between the quotes
+                const match = output.match(/^\("(.*)"\s*,?\s*\)$/s);
                 if (match) {
                     jsonStr = match[1];
-                } else {
-                    // Pattern 2: (JSON_STRING,)
-                    match = output.match(/^\((.*),?\s*\)$/s);
-                    if (match) {
-                        jsonStr = match[1];
-                    } else {
-                        // Pattern 3: Just the JSON string
-                        if (output.startsWith('{') && output.endsWith('}')) {
-                            jsonStr = output;
-                        }
-                    }
-                }
-                
-                if (jsonStr) {
-                    // Clean up escaped quotes and backslashes
-                    jsonStr = jsonStr.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                    console.log('[Jasper] Extracted JSON string:', JSON.stringify(jsonStr));
+                    
+                    // D-Bus escapes quotes and newlines - convert back to proper JSON
+                    console.log('[Jasper] Before unescape - first 50 chars:', JSON.stringify(jsonStr.substring(0, 50)));
+                    jsonStr = jsonStr.replace(/\\"/g, '"')  // Unescape quotes
+                                    .replace(/\\n/g, '\n')  // Unescape newlines
+                                    .replace(/\\\\/g, '\\'); // Unescape backslashes
+                    
+                    console.log('[Jasper] After unescape - first 50 chars:', JSON.stringify(jsonStr.substring(0, 50)));
+                    console.log('[Jasper] Cleaned JSON string length:', jsonStr.length);
                     
                     try {
                         const data = JSON.parse(jsonStr);
+                        console.log('[Jasper] Parsed data:', data);
                         
                         if (data.text) {
                             this._label.set_text(data.text);
+                            console.log('[Jasper] Set text to:', data.text);
                         }
                         if (data.tooltip && this._indicator) {
-                            this._indicator.set_tooltip_text(data.tooltip);
+                            // PanelMenu.Button doesn't have set_tooltip_text, skip for now
+                            console.log('[Jasper] Would set tooltip to:', data.tooltip);
                         }
                         return;
                     } catch (parseError) {
-                        console.warn('[Jasper] JSON parse failed:', parseError.message);
+                        console.warn('[Jasper] JSON parse failed:', parseError.message, 'JSON:', jsonStr);
                     }
+                } else {
+                    console.warn('[Jasper] Failed to match D-Bus format. Output:', JSON.stringify(output));
                 }
+            } else {
+                console.warn('[Jasper] D-Bus call failed or empty output. Success:', success, 'stderr:', stderr ? new TextDecoder().decode(stderr) : 'none');
             }
         } catch (error) {
-            console.warn('[Jasper] D-Bus call failed:', error.message);
+            console.warn('[Jasper] D-Bus call exception:', error.message);
         }
         
         // Fallback
         this._label.set_text('📅');
-        if (this._indicator) {
-            this._indicator.set_tooltip_text('Jasper: Waiting for daemon...');
-        }
+        // PanelMenu.Button doesn't have set_tooltip_text method
     }
 }
