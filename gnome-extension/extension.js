@@ -1,49 +1,46 @@
-// Minimal test extension to debug GNOME Shell 48 compatibility
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
-import St from 'gi://St';
-import Clutter from 'gi://Clutter';
-import * as Extension from 'resource:///org/gnome/shell/extensions/extension.js';
+// Legacy GNOME Shell extension format for maximum compatibility
+const { St, Clutter } = imports.gi;
+const Main = imports.ui.main;
+const PanelMenu = imports.ui.panelMenu;
 
-export default class JasperExtension extends Extension.Extension {
-    constructor(...args) {
-        super(...args);
-        this._indicator = null;
-        this._label = null;
-    }
+let indicator;
+let label;
 
-    enable() {
-        console.log('[Jasper] Extension enable() called');
-        
-        try {
-            // Create indicator
-            this._indicator = new PanelMenu.Button(0.0, 'Jasper Test', false);
-            
-            // Create simple label
-            this._label = new St.Label({
-                text: '🧪',
-                style_class: 'system-status-icon',
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            
-            this._indicator.add_child(this._label);
-            Main.panel.addToStatusArea('jasper-test', this._indicator);
-            
-            console.log('[Jasper] Extension UI created successfully');
-        } catch (error) {
-            console.error('[Jasper] Error in enable():', error);
-        }
-    }
+function init() {
+    log('[Jasper] Extension init() called');
+}
 
-    disable() {
-        console.log('[Jasper] Extension disable() called');
+function enable() {
+    log('[Jasper] Extension enable() called');
+    
+    try {
+        // Create indicator
+        indicator = new PanelMenu.Button(0.0, 'Jasper Test', false);
         
-        if (this._indicator) {
-            this._indicator.destroy();
-            this._indicator = null;
-        }
+        // Create simple label
+        label = new St.Label({
+            text: '🧪',
+            style_class: 'system-status-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
         
-        this._label = null;
-        console.log('[Jasper] Extension disabled successfully');
+        indicator.add_child(label);
+        Main.panel.addToStatusArea('jasper-test', indicator);
+        
+        log('[Jasper] Extension UI created successfully');
+    } catch (error) {
+        log('[Jasper] Error in enable(): ' + error);
     }
+}
+
+function disable() {
+    log('[Jasper] Extension disable() called');
+    
+    if (indicator) {
+        indicator.destroy();
+        indicator = null;
+    }
+    
+    label = null;
+    log('[Jasper] Extension disabled successfully');
 }
