@@ -78,52 +78,36 @@ export default class JasperExtension extends Extension.Extension {
             
             if (success && stdout && stdout.length > 0) {
                 const output = new TextDecoder().decode(stdout).trim();
-                console.log('[Jasper] D-Bus output:', JSON.stringify(output));
                 
                 // D-Bus returns: ("JSON_STRING",)
                 // Extract the JSON string from the D-Bus tuple format
-                let jsonStr = null;
-                
-                // Pattern: ("JSON_STRING",) - capture everything between the quotes
                 const match = output.match(/^\("(.*)"\s*,?\s*\)$/s);
                 if (match) {
-                    jsonStr = match[1];
-                    console.log('[Jasper] Extracted JSON string:', JSON.stringify(jsonStr));
+                    let jsonStr = match[1];
                     
                     // D-Bus escapes quotes and newlines - convert back to proper JSON
-                    console.log('[Jasper] Before unescape - first 50 chars:', JSON.stringify(jsonStr.substring(0, 50)));
                     jsonStr = jsonStr.replace(/\\"/g, '"')  // Unescape quotes
                                     .replace(/\\n/g, '\n')  // Unescape newlines
                                     .replace(/\\\\/g, '\\'); // Unescape backslashes
                     
-                    console.log('[Jasper] After unescape - first 50 chars:', JSON.stringify(jsonStr.substring(0, 50)));
-                    console.log('[Jasper] Cleaned JSON string length:', jsonStr.length);
-                    
                     try {
                         const data = JSON.parse(jsonStr);
-                        console.log('[Jasper] Parsed data:', data);
                         
                         if (data.text) {
                             this._label.set_text(data.text);
-                            console.log('[Jasper] Set text to:', data.text);
                         }
                         if (data.tooltip) {
                             this._insightText = data.tooltip;
                             this._updateMenuText();
-                            console.log('[Jasper] Set insight to:', data.tooltip);
                         }
                         return;
                     } catch (parseError) {
-                        console.warn('[Jasper] JSON parse failed:', parseError.message, 'JSON:', jsonStr);
+                        // Fall through to fallback
                     }
-                } else {
-                    console.warn('[Jasper] Failed to match D-Bus format. Output:', JSON.stringify(output));
                 }
-            } else {
-                console.warn('[Jasper] D-Bus call failed or empty output. Success:', success, 'stderr:', stderr ? new TextDecoder().decode(stderr) : 'none');
             }
         } catch (error) {
-            console.warn('[Jasper] D-Bus call exception:', error.message);
+            // Fall through to fallback
         }
         
         // Fallback
