@@ -1,5 +1,6 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
@@ -16,63 +17,26 @@ export default class JasperExtension extends Extension.Extension {
         this._indicator.add_child(this._label);
         Main.panel.addToStatusArea('jasper-ai-insights', this._indicator);
         
-        // Store tooltip text
-        this._tooltipText = 'Jasper: Loading...';
+        // Store insight text
+        this._insightText = 'Jasper: Loading...';
         
-        // Add hover tooltip functionality
-        this._indicator.reactive = true;
-        this._indicator.track_hover = true;
+        // Create popup menu
+        this._item = new PopupMenu.PopupMenuItem('');
+        this._item.label.clutter_text.set_line_wrap(true);
+        this._item.label.style = 'max-width: 300px;';
+        this._updateMenuText();
+        this._indicator.menu.addMenuItem(this._item);
         
-        let tooltip = null;
-        this._indicator.connect('notify::hover', (actor) => {
-            if (actor.hover) {
-                // Show tooltip on hover
-                if (!tooltip) {
-                    tooltip = new St.Label({
-                        style_class: 'dash-label',
-                        text: this._tooltipText,
-                        opacity: 0,
-                        style: 'padding: 6px 12px; background-color: rgba(0,0,0,0.9); color: white; border-radius: 5px;'
-                    });
-                    Main.uiGroup.add_child(tooltip);
-                }
-                
-                tooltip.set_text(this._tooltipText);
-                
-                // Position tooltip above the indicator
-                let [stageX, stageY] = this._indicator.get_transformed_position();
-                let [width, height] = this._indicator.get_size();
-                tooltip.set_position(stageX + width/2 - tooltip.width/2, stageY - tooltip.height - 5);
-                
-                tooltip.ease({
-                    opacity: 255,
-                    duration: 150,
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
-                });
-            } else {
-                // Hide tooltip
-                if (tooltip) {
-                    tooltip.ease({
-                        opacity: 0,
-                        duration: 150,
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                        onComplete: () => {
-                            if (tooltip) {
-                                Main.uiGroup.remove_child(tooltip);
-                                tooltip = null;
-                            }
-                        }
-                    });
-                }
-            }
-        });
+        // Add separator
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         
-        // Add click functionality
-        this._indicator.connect('button-press-event', () => {
-            // Refresh insights on click
+        // Add refresh button
+        let refreshItem = new PopupMenu.PopupMenuItem('🔄 Refresh Now');
+        refreshItem.connect('activate', () => {
             this._refreshInsights();
-            return Clutter.EVENT_STOP;
+            this._indicator.menu.close();
         });
+        this._indicator.menu.addMenuItem(refreshItem);
         
         // Immediate first call
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
@@ -97,6 +61,13 @@ export default class JasperExtension extends Extension.Extension {
             this._indicator = null;
         }
         this._label = null;
+        this._item = null;
+    }
+    
+    _updateMenuText() {
+        if (this._item) {
+            this._item.label.set_text(this._insightText);
+        }
     }
     
     _refreshInsights() {
@@ -137,8 +108,9 @@ export default class JasperExtension extends Extension.Extension {
                             console.log('[Jasper] Set text to:', data.text);
                         }
                         if (data.tooltip) {
-                            this._tooltipText = data.tooltip;
-                            console.log('[Jasper] Set tooltip to:', data.tooltip);
+                            this._insightText = data.tooltip;
+                            this._updateMenuText();
+                            console.log('[Jasper] Set insight to:', data.tooltip);
                         }
                         return;
                     } catch (parseError) {
@@ -156,6 +128,7 @@ export default class JasperExtension extends Extension.Extension {
         
         // Fallback
         this._label.set_text('📅');
-        this._tooltipText = 'Jasper: Waiting for daemon...';
+        this._insightText = 'Jasper: Waiting for daemon...';
+        this._updateMenuText();
     }
 }
