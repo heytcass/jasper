@@ -34,7 +34,7 @@ export default class JasperExtension extends Extension.Extension {
                         opacity: 0,
                         style: 'padding: 6px 12px; background-color: rgba(0,0,0,0.9); color: white; border-radius: 5px;'
                     });
-                    Main.uiGroup.add_actor(tooltip);
+                    Main.uiGroup.add_child(tooltip);
                 }
                 
                 tooltip.set_text(this._tooltipText);
@@ -58,7 +58,7 @@ export default class JasperExtension extends Extension.Extension {
                         mode: Clutter.AnimationMode.EASE_OUT_QUAD,
                         onComplete: () => {
                             if (tooltip) {
-                                Main.uiGroup.remove_actor(tooltip);
+                                Main.uiGroup.remove_child(tooltip);
                                 tooltip = null;
                             }
                         }
