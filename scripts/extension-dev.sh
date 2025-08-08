@@ -181,9 +181,9 @@ test_dbus_communication() {
     log_info "Testing D-Bus communication..."
     
     # Check if daemon is running
-    if ! systemctl --user is-active jasper-companion >/dev/null 2>&1; then
+    if ! systemctl --user is-active jasper-companion-daemon >/dev/null 2>&1; then
         log_warning "Jasper daemon is not running. Starting it..."
-        systemctl --user start jasper-companion || log_warning "Could not start daemon"
+        systemctl --user start jasper-companion-daemon || log_warning "Could not start daemon"
         sleep 2
     fi
     
@@ -219,7 +219,7 @@ show_status() {
     
     # Show daemon status
     echo "Daemon Status:"
-    if systemctl --user is-active jasper-companion >/dev/null 2>&1; then
+    if systemctl --user is-active jasper-companion-daemon >/dev/null 2>&1; then
         echo "  Jasper Daemon: Running"
     else
         echo "  Jasper Daemon: Not running"
