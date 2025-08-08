@@ -139,7 +139,7 @@ Add to your Waybar config (`~/.config/waybar/config`):
     "format": "{}",
     "tooltip": true,
     "interval": 900,
-    "exec": "/path/to/jasper/waybar-jasper.sh",
+    "exec": "/path/to/jasper/tools/waybar-jasper.sh",
     "return-type": "json",
     "signal": 8,
     "on-click": "notify-send 'Jasper' 'Refreshing...' && pkill -RTMIN+8 waybar"
@@ -261,20 +261,20 @@ For rapid development and testing:
 
 #### Backend Development
 ```bash
-./dev-mode.sh start          # Enter development mode
-./quick-test.sh full         # Build + test + reload Waybar
-./quick-test.sh css          # Live CSS editing
-./dev-mode.sh stop           # Exit development mode
+./tools/dev-mode.sh start          # Enter development mode
+./tools/quick-test.sh full         # Build + test + reload Waybar
+./tools/quick-test.sh css          # Live CSS editing
+./tools/dev-mode.sh stop           # Exit development mode
 ```
 
 #### Extension Development
 ```bash
-./scripts/extension-dev.sh status    # Check extension status
-./scripts/extension-dev.sh install   # Install development extension
-./scripts/extension-dev.sh uninstall # Remove development extension
+./tools/extension-dev.sh status    # Check extension status
+./tools/extension-dev.sh install   # Install development extension
+./tools/extension-dev.sh uninstall # Remove development extension
 ```
 
-See [EXTENSION_DEVELOPMENT.md](EXTENSION_DEVELOPMENT.md) for comprehensive extension development guide.
+See [docs/EXTENSION_DEVELOPMENT.md](docs/EXTENSION_DEVELOPMENT.md) for comprehensive extension development guide.
 
 ## 🐛 Troubleshooting
 
@@ -301,7 +301,7 @@ systemctl --user restart jasper-companion-daemon # Restart daemon
 **Waybar Not Updating:**
 ```bash
 pkill -RTMIN+8 waybar       # Force refresh signal
-./waybar-jasper.sh          # Test output directly
+./tools/waybar-jasper.sh          # Test output directly
 ```
 
 ### Debug Mode
@@ -315,9 +315,9 @@ journalctl --user -u jasper-companion-daemon -f
 
 Jasper uses a specialized development workflow optimized for NixOS environments:
 
-- **Backend Development**: See [DEVELOPMENT.md](DEVELOPMENT.md) for Rust daemon development
-- **Extension Development**: See [EXTENSION_DEVELOPMENT.md](EXTENSION_DEVELOPMENT.md) for GNOME Shell extension work
-- **Lessons Learned**: See [docs/EXTENSION_LESSONS_LEARNED.md](docs/EXTENSION_LESSONS_LEARNED.md) for development insights
+- **Backend Development**: See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for Rust daemon development
+- **Extension Development**: See [docs/EXTENSION_DEVELOPMENT.md](docs/EXTENSION_DEVELOPMENT.md) for GNOME Shell extension work
+- **Lessons Learned**: See [docs/architecture/EXTENSION_LESSONS_LEARNED.md](docs/architecture/EXTENSION_LESSONS_LEARNED.md) for development insights
 
 ### Quick Contributor Setup
 ```bash
@@ -326,11 +326,11 @@ cd jasper
 nix develop                  # Enter development shell
 
 # For daemon development
-./dev-mode.sh start         # Start development mode
+./tools/dev-mode.sh start         # Start development mode
 cargo test                  # Run tests
 
 # For extension development  
-./scripts/extension-dev.sh install    # Install development extension
+./tools/extension-dev.sh install    # Install development extension
 ```
 
 ## 📄 License

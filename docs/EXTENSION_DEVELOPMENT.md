@@ -9,7 +9,7 @@
 ```bash
 # 1. Edit gnome-extension/extension.js
 # 2. Run development workflow
-./scripts/extension-dev.sh install
+./tools/extension-dev.sh install
 # 3. Check GNOME Shell panel (may require logout/login on Wayland)
 # 4. Check logs: tail ~/.jasper-extension-dev.log
 ```
@@ -51,13 +51,13 @@ On NixOS, working extensions are installed at:
 
 ### 2. Extension Development Script
 
-The `./scripts/extension-dev.sh` script provides a complete development workflow:
+The `./tools/extension-dev.sh` script provides a complete development workflow:
 
 ```bash
-./scripts/extension-dev.sh install    # Complete cycle: cleanup, build, install, enable, test
-./scripts/extension-dev.sh status     # Show extension and daemon status
-./scripts/extension-dev.sh uninstall  # Remove development extension
-./scripts/extension-dev.sh cleanup    # Remove ALL jasper extensions
+./tools/extension-dev.sh install    # Complete cycle: cleanup, build, install, enable, test
+./tools/extension-dev.sh status     # Show extension and daemon status
+./tools/extension-dev.sh uninstall  # Remove development extension
+./tools/extension-dev.sh cleanup    # Remove ALL jasper extensions
 ```
 
 #### What `install` Does:
@@ -110,7 +110,7 @@ journalctl | grep jasper-extension
 
 #### Status Checks
 ```bash
-./scripts/extension-dev.sh status
+./tools/extension-dev.sh status
 ```
 
 Shows:
@@ -132,7 +132,7 @@ Look for extension icon in GNOME Shell top panel:
 **Solution**: 
 ```bash
 # Check if properly installed
-./scripts/extension-dev.sh status
+./tools/extension-dev.sh status
 
 # On Wayland, may need logout/login
 # On X11, Alt+F2, r should work
@@ -146,15 +146,15 @@ Look for extension icon in GNOME Shell top panel:
 #### Code Changes Not Taking Effect  
 **Symptoms**: Edit `extension.js` but no changes visible
 **Solutions**:
-1. Re-run full installation: `./scripts/extension-dev.sh install`
-2. If persistent, increment version: `./scripts/extension-dev.sh increment-version`
+1. Re-run full installation: `./tools/extension-dev.sh install`
+2. If persistent, increment version: `./tools/extension-dev.sh increment-version`
 3. Check logs for execution: `tail ~/.jasper-extension-dev.log`
 
 #### No Log File Generated
 **Symptoms**: `~/.jasper-extension-dev.log` doesn't exist
 **Cause**: Extension JavaScript not executing at all
 **Solutions**:
-1. Verify system-wide installation: `./scripts/extension-dev.sh status`
+1. Verify system-wide installation: `./tools/extension-dev.sh status`
 2. Check GNOME Shell version compatibility (supports 45-48)
 3. Try logout/login cycle
 
@@ -171,7 +171,7 @@ When extension changes aren't taking effect despite reinstallation:
 
 #### Increment Development Version
 ```bash
-./scripts/extension-dev.sh increment-version
+./tools/extension-dev.sh increment-version
 ```
 
 This provides instructions to:
@@ -200,7 +200,7 @@ When development is complete:
 
 ```bash
 # Remove development extension
-./scripts/extension-dev.sh uninstall
+./tools/extension-dev.sh uninstall
 
 # Production deployment through NixOS config
 cd ~/.nixos
@@ -216,7 +216,7 @@ The extension development workflow complements the existing Rust daemon developm
 ```bash
 # Combined development workflow
 ./dev-mode.sh start                    # Start daemon development
-./scripts/extension-dev.sh install     # Install extension development
+./tools/extension-dev.sh install     # Install extension development
 
 # Make changes to both:
 # - daemon/src/*.rs (Rust code)  
@@ -224,11 +224,11 @@ The extension development workflow complements the existing Rust daemon developm
 
 # Test changes:
 ./quick-test.sh full                   # Test daemon
-./scripts/extension-dev.sh status      # Test extension
+./tools/extension-dev.sh status      # Test extension
 
 # When complete:
 ./dev-mode.sh stop                     # Stop daemon development
-./scripts/extension-dev.sh uninstall   # Remove extension development
+./tools/extension-dev.sh uninstall   # Remove extension development
 ```
 
 ### Files Modified in Development Mode
@@ -237,7 +237,7 @@ The extension development workflow complements the existing Rust daemon developm
 - `~/.config/waybar/` - Overridden with development configs
 - `daemon/src/` - Direct Rust development
 
-**Extension Development** (`./scripts/extension-dev.sh`):  
+**Extension Development** (`./tools/extension-dev.sh`):  
 - `/run/current-system/sw/share/gnome-shell/extensions/` - System extension
 - `gnome-extension/` - Direct JavaScript development
 
@@ -249,16 +249,16 @@ The extension development workflow complements the existing Rust daemon developm
 
 Before starting extension development work:
 
-1. **Check current status**: `./scripts/extension-dev.sh status`
+1. **Check current status**: `./tools/extension-dev.sh status`
 2. **Verify daemon**: `./dev-mode.sh status` (start if needed)
-3. **Clean slate** (if needed): `./scripts/extension-dev.sh cleanup`
+3. **Clean slate** (if needed): `./tools/extension-dev.sh cleanup`
 
 ### Development Cycle
 
 For each extension code change:
 
 1. **Edit code**: Modify `gnome-extension/extension.js`
-2. **Install**: `./scripts/extension-dev.sh install`  
+2. **Install**: `./tools/extension-dev.sh install`  
 3. **Verify**: Check logs `tail ~/.jasper-extension-dev.log`
 4. **Test UI**: Look for extension icon in GNOME panel
 5. **Iterate**: Repeat until satisfied
@@ -278,9 +278,9 @@ After each change, verify these indicators:
 
 When things go wrong:
 
-1. **Check status first**: `./scripts/extension-dev.sh status`
+1. **Check status first**: `./tools/extension-dev.sh status`
 2. **Review logs**: `tail ~/.jasper-extension-dev.log`
-3. **Clean slate**: `./scripts/extension-dev.sh cleanup` then `install`
+3. **Clean slate**: `./tools/extension-dev.sh cleanup` then `install`
 4. **Version increment**: If caching issues persist
 5. **Manual testing**: Use `test-symlink-approach.sh` for step-by-step debugging
 
@@ -308,7 +308,7 @@ When things go wrong:
 
 **Code changes not visible**  
 → Extension caching/UUID conflicts
-→ Re-run `./scripts/extension-dev.sh install`
+→ Re-run `./tools/extension-dev.sh install`
 
 **Panel icon missing despite "ACTIVE" status**
 → JavaScript not executing  

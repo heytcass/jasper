@@ -71,7 +71,7 @@
       "format": "{}",
       "tooltip": true,
       "interval": 900,
-      "exec": "/home/tom/git/jasper/waybar-jasper.sh",
+      "exec": "/home/tom/git/jasper/tools/waybar-jasper.sh",
       "return-type": "json",
       "signal": 8,
       "on-click": "notify-send 'Jasper' 'Refreshing insights...' && pkill -RTMIN+8 waybar"

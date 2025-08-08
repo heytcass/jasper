@@ -7,19 +7,19 @@ This project requires a special development workflow to avoid slow NixOS rebuild
 ### Before Any Development Work:
 
 1. **Read the development guides**: 
-   - **Backend/Waybar**: Read `DEVELOPMENT.md` completely
-   - **GNOME Extension**: Read `EXTENSION_DEVELOPMENT.md` for extension work
-2. **Check current status**: Run `./dev-mode.sh status`
-3. **Enter development mode**: Run `./dev-mode.sh start` if not already active  
-4. **For extension work**: Run `./scripts/extension-dev.sh status`
-5. **Verify setup**: Run `./quick-test.sh status` to confirm everything is working
+   - **Backend/Waybar**: Read `docs/DEVELOPMENT.md` completely
+   - **GNOME Extension**: Read `docs/EXTENSION_DEVELOPMENT.md` for extension work
+2. **Check current status**: Run `./tools/dev-mode.sh status`
+3. **Enter development mode**: Run `./tools/dev-mode.sh start` if not already active  
+4. **For extension work**: Run `./tools/extension-dev.sh status`
+5. **Verify setup**: Run `./tools/quick-test.sh status` to confirm everything is working
 
 ### Development Workflow:
 
 #### Backend/Waybar Development:
 ```bash
 # Start daemon development
-./dev-mode.sh start
+./tools/dev-mode.sh start
 
 # Make your changes to:
 # - daemon/src/*.rs (Rust code)
@@ -27,10 +27,10 @@ This project requires a special development workflow to avoid slow NixOS rebuild
 # - waybar/config.json (Waybar configuration)
 
 # Test your changes
-./quick-test.sh full
+./tools/quick-test.sh full
 
 # For CSS changes, use live editing
-./quick-test.sh css
+./tools/quick-test.sh css
 
 # When done with session
 ./dev-mode.sh stop
@@ -39,35 +39,35 @@ This project requires a special development workflow to avoid slow NixOS rebuild
 #### GNOME Extension Development:
 ```bash
 # Check extension status
-./scripts/extension-dev.sh status
+./tools/extension-dev.sh status
 
 # Make changes to gnome-extension/extension.js
 
 # Install and test extension
-./scripts/extension-dev.sh install
+./tools/extension-dev.sh install
 
 # Check logs for execution verification
 tail ~/.jasper-extension-dev.log
 
 # When done with session
-./scripts/extension-dev.sh uninstall
+./tools/extension-dev.sh uninstall
 ```
 
 #### Combined Development (Backend + Extension):
 ```bash
 # Start both development modes
-./dev-mode.sh start
-./scripts/extension-dev.sh install
+./tools/dev-mode.sh start
+./tools/extension-dev.sh install
 
 # Make changes to both:
 # - daemon/src/*.rs AND gnome-extension/extension.js
 
 # Test both
-./quick-test.sh full                    # Test backend
-./scripts/extension-dev.sh status       # Test extension
+./tools/quick-test.sh full                    # Test backend
+./tools/extension-dev.sh status       # Test extension
 
 # Stop both when done
-./scripts/extension-dev.sh uninstall
+./tools/extension-dev.sh uninstall
 ./dev-mode.sh stop
 ```
 
@@ -97,33 +97,33 @@ tail ~/.jasper-extension-dev.log
 
 #### Backend/Waybar Testing:
 ```bash
-./waybar-jasper.sh           # Test JSON output
-./quick-test.sh test         # Build and test
-./quick-test.sh reload       # Reload waybar
-./quick-test.sh full         # Complete test cycle
+./tools/waybar-jasper.sh           # Test JSON output
+./tools/quick-test.sh test         # Build and test
+./tools/quick-test.sh reload       # Reload waybar
+./tools/quick-test.sh full         # Complete test cycle
 ```
 
 #### Extension Testing:
 ```bash
-./scripts/extension-dev.sh install    # Full extension cycle
-./scripts/extension-dev.sh status     # Check extension status
-./scripts/extension-dev.sh test-dbus   # Test D-Bus communication
+./tools/extension-dev.sh install    # Full extension cycle
+./tools/extension-dev.sh status     # Check extension status
+./tools/extension-dev.sh test-dbus   # Test D-Bus communication
 tail ~/.jasper-extension-dev.log       # Check execution logs
 ```
 
 ### Error Recovery:
 
 #### Backend Issues:
-- If waybar isn't updating: `./quick-test.sh reload`
+- If waybar isn't updating: `./tools/quick-test.sh reload`
 - If build fails: `cargo build` to see errors (may need `nix develop` first)
 - If confused about state: `./dev-mode.sh status`
 
 #### Extension Issues:
-- If extension not visible: `./scripts/extension-dev.sh status` and check installation
-- If code changes not taking effect: Re-run `./scripts/extension-dev.sh install`
-- If persistent caching: `./scripts/extension-dev.sh increment-version`
+- If extension not visible: `./tools/extension-dev.sh status` and check installation
+- If code changes not taking effect: Re-run `./tools/extension-dev.sh install`
+- If persistent caching: `./tools/extension-dev.sh increment-version`
 - If no logs generated: Extension not executing, check system installation
-- If confused about extension state: `./scripts/extension-dev.sh status`
+- If confused about extension state: `./tools/extension-dev.sh status`
 
 ### Expected Behavior:
 
@@ -167,8 +167,8 @@ tail ~/.jasper-extension-dev.log       # Check execution logs
 ### Documentation:
 
 - `README.md` - User-focused quick start guide
-- `DEVELOPMENT.md` - Complete backend architecture and contributor guide
-- `EXTENSION_DEVELOPMENT.md` - GNOME extension development workflow (READ THIS for extension work)
+- `docs/DEVELOPMENT.md` - Complete backend architecture and contributor guide
+- `docs/EXTENSION_DEVELOPMENT.md` - GNOME extension development workflow (READ THIS for extension work)
 - `waybar/README.md` - Waybar integration setup
 
 ## Important Notes:
@@ -177,7 +177,7 @@ tail ~/.jasper-extension-dev.log       # Check execution logs
 - Production uses NixOS-managed configuration  
 - Always exit development modes when done:
   - Backend: `./dev-mode.sh stop`
-  - Extension: `./scripts/extension-dev.sh uninstall`
+  - Extension: `./tools/extension-dev.sh uninstall`
 - Changes are only persisted to NixOS config manually after development
 
 ## Critical Success Patterns:
@@ -196,4 +196,4 @@ tail ~/.jasper-extension-dev.log       # Check execution logs
 4. **ACTIVE but no panel icon**: JavaScript running but UI creation failed
 5. **Persistent caching**: Code changes don't appear despite reinstallation
 
-**When extension development isn't working**: Always check `EXTENSION_DEVELOPMENT.md` troubleshooting section first.
+**When extension development isn't working**: Always check `docs/EXTENSION_DEVELOPMENT.md` troubleshooting section first.

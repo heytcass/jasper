@@ -1,54 +1,103 @@
 # Rust
 /target/
 **/*.rs.bk
+Cargo.lock
 
-# IDE
+# IDE & Editors
 .vscode/
 .idea/
+.vim/
+.nvim/
 *.swp
 *.swo
+*~
+.#*
+\#*#
 
-# OS
+# OS Files
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Build artifacts
-# Note: Cargo.lock should be committed for applications
-
-# Local development
-/dev.db
-/.env
-/.env.local
-
-# User data
-/data/
-/logs/
-
-# NixOS
-result
-result-*
-
-# Temporary files
+# Build & Runtime Artifacts
+/target/
+result*
+*.log
+*.pid
 *.tmp
 *.temp
 .dev-backups/
+node_modules/
+dist/
+build/
 
-# Development artifacts (from cleanup)
-CLAUDE_INTEGRATION.md
-OPTIMIZATION_PRD.md
-QUICK_REFERENCE.md
-dev-enhanced.sh
+# Development Environment
+/.env
+/.env.local
+/.env.development
+/.env.test
+/.env.production
+/dev.db
 
-# Security - Never commit API keys or secrets
+# User Data & Runtime
+/data/
+/logs/
+/cache/
+*.sqlite
+*.sqlite3
+*.db
+
+# Documentation Build
+docs/_build/
+docs/.doctrees/
+site/
+
+# Testing
+coverage/
+.coverage
+*.cover
+.pytest_cache/
+.tox/
+
+# Security - Never commit secrets
 config.toml
 *.key
 *.secret
+*.pem
+*.p12
+*.keystore
 *api_key*
 *client_secret*
 *token*
+*password*
+secrets.yaml
+secrets.yml
+.sops.yaml
 
 # Configuration files that might contain secrets
 /daemon/config.toml
 /config.toml
-secrets.yaml
-secrets.yml
+~/.config/jasper-companion/
+
+# Nix
+result
+result-*
+.direnv/
+
+# Platform specific
+# macOS
+*.dSYM
+
+# Windows
+*.exe
+*.dll
+*.pdb
+
+# Linux
+*.so
+*.a
+
+# Temporary development files
+*.bak
+*.orig
+*~
