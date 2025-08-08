@@ -73,7 +73,7 @@ export default class JasperExtension extends Extension.Extension {
     _refreshInsights() {
         try {
             const [success, stdout, stderr] = GLib.spawn_command_line_sync(
-                'gdbus call --session --dest org.personal.CompanionAI --object-path /org/personal/CompanionAI/Companion --method org.personal.CompanionAI.Companion1.GetFormattedInsights "gnome"'
+                '/run/current-system/sw/bin/gdbus call --session --dest org.personal.CompanionAI --object-path /org/personal/CompanionAI/Companion --method org.personal.CompanionAI.Companion1.GetFormattedInsights "gnome"'
             );
             
             if (success && stdout && stdout.length > 0) {
