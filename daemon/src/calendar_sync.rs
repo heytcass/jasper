@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context};
 use chrono::{Utc, Duration};
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -71,7 +71,8 @@ impl CalendarSyncService {
                     info!("Fetched {} events from Google Calendar", total_events);
                     
                     // Store events in database with proper calendar records
-                    self.store_calendar_events_with_metadata(events_by_calendar).await?;
+                    self.store_calendar_events_with_metadata(events_by_calendar).await
+                        .context("Failed to store calendar events with metadata")?;
                 }
                 Err(e) => {
                     error!("Failed to fetch Google Calendar events: {}", e);
@@ -119,7 +120,8 @@ impl CalendarSyncService {
             info!("Calendar '{}' (ID: {}) mapped to database ID: {}", calendar_name, calendar_id, db_calendar_id);
             
             // Now store events with correct calendar_id
-            self.store_events_for_calendar(events, db_calendar_id).await?;
+            self.store_events_for_calendar(events, db_calendar_id).await
+                .with_context(|| format!("Failed to store events for calendar: {}", calendar_name))?;
         }
         
         info!("Calendar sync completed");
@@ -255,11 +257,13 @@ impl CalendarSyncService {
     /// Complete authentication with authorization code
     pub async fn authenticate_with_code(&mut self, auth_code: &str, csrf_token: &str) -> Result<()> {
         if let Some(ref mut google_calendar) = self.google_calendar {
-            google_calendar.authenticate_with_code(auth_code, csrf_token).await?;
+            google_calendar.authenticate_with_code(auth_code, csrf_token).await
+                .context("Failed to authenticate with Google Calendar using provided code")?;
             info!("Google Calendar authentication completed successfully");
             
             // Trigger immediate sync after authentication
-            self.sync_calendars().await?;
+            self.sync_calendars().await
+                .context("Failed to sync calendars after authentication")?;
             
             Ok(())
         } else {

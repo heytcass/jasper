@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::process::Command;
+use std::path::PathBuf;
+use std::env;
 use tracing::{debug, warn, info};
 
 /// SOPS integration for secure secret management
@@ -12,54 +14,136 @@ pub struct SopsSecrets {
 impl SopsSecrets {
     /// Load secrets from SOPS encrypted file
     pub fn load() -> Result<Self> {
-        // Try standard locations for SOPS secrets
-        let paths = [
-            "~/.nixos/secrets/secrets.yaml",
-            "~/.config/jasper-companion/secrets.yaml", 
-            "/etc/jasper-companion/secrets.yaml"
-        ];
-        
-        for path in &paths {
-            if let Ok(secrets) = Self::load_from_file(path) {
-                return Ok(secrets);
+        Self::load_from_paths(&Self::get_default_paths())
+    }
+    
+    /// Load secrets with custom search paths
+    pub fn load_from_paths(paths: &[PathBuf]) -> Result<Self> {
+        for path in paths {
+            debug!("Trying SOPS secrets file: {:?}", path);
+            if path.exists() {
+                match Self::load_from_file_path(path) {
+                    Ok(secrets) => {
+                        info!("Successfully loaded secrets from: {:?}", path);
+                        return Ok(secrets);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load secrets from {:?}: {}", path, e);
+                        continue;
+                    }
+                }
             }
         }
         
         // Fallback to empty secrets if no file found
-        warn!("No SOPS secrets file found in standard locations");
+        warn!("No SOPS secrets file found in search paths: {:?}", paths);
         Ok(Self::default())
     }
     
-    /// Load secrets from a specific SOPS file
-    pub fn load_from_file(path: &str) -> Result<Self> {
-        info!("Loading secrets from SOPS file: {}", path);
+    /// Get default search paths for SOPS secrets files
+    fn get_default_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
         
-        // Run sops -d to decrypt the file using nix-shell
-        let output = Command::new("nix-shell")
+        // Check environment variable first
+        if let Ok(custom_path) = env::var("JASPER_SOPS_PATH") {
+            paths.push(PathBuf::from(custom_path));
+        }
+        
+        // Add standard locations with proper path expansion
+        if let Some(home_dir) = env::var("HOME").ok() {
+            let home_path = PathBuf::from(home_dir);
+            paths.push(home_path.join(".nixos/secrets/secrets.yaml"));
+            paths.push(home_path.join(".config/jasper-companion/secrets.yaml"));
+        }
+        
+        // System-wide location
+        paths.push(PathBuf::from("/etc/jasper-companion/secrets.yaml"));
+        
+        // Development/local location
+        if let Ok(current_dir) = env::current_dir() {
+            paths.push(current_dir.join("secrets.yaml"));
+            paths.push(current_dir.join(".secrets.yaml"));
+        }
+        
+        paths
+    }
+    
+    /// Load secrets from a specific SOPS file (string path for backward compatibility)
+    pub fn load_from_file(path: &str) -> Result<Self> {
+        Self::load_from_file_path(&PathBuf::from(path))
+    }
+    
+    /// Load secrets from a specific SOPS file path
+    fn load_from_file_path(path: &PathBuf) -> Result<Self> {
+        let path_str = path.to_string_lossy();
+        debug!("Loading secrets from SOPS file: {}", path_str);
+        
+        // Validate file exists and is readable
+        if !path.exists() {
+            return Err(anyhow!("SOPS file does not exist: {}", path_str));
+        }
+        
+        if !path.is_file() {
+            return Err(anyhow!("SOPS path is not a file: {}", path_str));
+        }
+        
+        // Try different methods to run sops
+        Self::decrypt_sops_file(path)
+    }
+    
+    /// Decrypt SOPS file using different available methods
+    fn decrypt_sops_file(path: &PathBuf) -> Result<Self> {
+        let path_str = path.to_string_lossy();
+        
+        // Method 1: Try direct sops command (if available in PATH)
+        if let Ok(output) = Command::new("sops")
+            .arg("-d")
+            .arg(&*path_str)
+            .output() {
+            
+            if output.status.success() {
+                let decrypted = String::from_utf8_lossy(&output.stdout);
+                return Self::parse_yaml(&decrypted);
+            } else {
+                debug!("Direct sops command failed: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+        
+        // Method 2: Try sops via nix-shell
+        if let Ok(output) = Command::new("nix-shell")
             .arg("-p")
             .arg("sops")
             .arg("--run")
-            .arg(&format!("sops -d {}", path))
-            .output();
-        
-        match output {
-            Ok(output) => {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(anyhow!("SOPS decryption failed: {}", stderr));
-                }
-                
+            .arg(&format!("sops -d {}", path_str))
+            .output() {
+            
+            if output.status.success() {
                 let decrypted = String::from_utf8_lossy(&output.stdout);
-                Self::parse_yaml(&decrypted)
-            }
-            Err(e) => {
-                warn!("SOPS command failed: {}. Falling back to config file values.", e);
-                // Return empty secrets map to fall back to config file values
-                Ok(Self {
-                    secrets: HashMap::new(),
-                })
+                return Self::parse_yaml(&decrypted);
+            } else {
+                debug!("Nix-shell sops command failed: {}", String::from_utf8_lossy(&output.stderr));
             }
         }
+        
+        // Method 3: Try sops via nix develop (if in a flake)
+        if let Ok(output) = Command::new("nix")
+            .arg("develop")
+            .arg("--command")
+            .arg("sops")
+            .arg("-d")
+            .arg(&*path_str)
+            .output() {
+            
+            if output.status.success() {
+                let decrypted = String::from_utf8_lossy(&output.stdout);
+                return Self::parse_yaml(&decrypted);
+            } else {
+                debug!("Nix develop sops command failed: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+        
+        // All methods failed
+        Err(anyhow!("Could not decrypt SOPS file using any available method: {}", path_str))
     }
     
     /// Parse YAML content into secrets map with support for nested structures

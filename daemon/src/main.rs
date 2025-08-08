@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use clap::{Parser, Subcommand};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -102,12 +102,14 @@ async fn main() -> Result<()> {
     info!("Jasper Companion Daemon starting up");
 
     // Load configuration
-    let config = Config::load().await?;
+    let config = Config::load().await
+        .context("Failed to load application configuration")?;
     info!("Configuration loaded successfully");
 
     // Initialize database
     let db_path = config.read().get_database_path()?;
-    let database = DatabaseInner::new(&db_path).await?;
+    let database = DatabaseInner::new(&db_path).await
+        .with_context(|| format!("Failed to initialize database at {:?}", db_path))?;
     info!("Database initialized");
 
     // Initialize correlation engine
@@ -138,7 +140,8 @@ async fn main() -> Result<()> {
         Commands::TestNotification => Box::new(TestNotificationCommand),
     };
 
-    command.execute(&context).await?;
+    command.execute(&context).await
+        .context("Failed to execute command")?;
 
     Ok(())
 }

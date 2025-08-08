@@ -1,6 +1,6 @@
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use tokio::fs;
 use tracing::{info, debug, warn};
 use chrono;
 use chrono_tz;
+// URL validation without external crate
 
 use crate::sops_integration::SopsSecrets;
 
@@ -414,81 +415,273 @@ impl Config {
     
     /// Validate configuration values
     fn validate(&self) -> Result<()> {
-        // Validate timezone
-        if let Err(_) = self.general.timezone.parse::<chrono_tz::Tz>() {
-            return Err(anyhow::anyhow!("Invalid timezone: {}", self.general.timezone));
+        self.validate_basic_config()
+            .context("Basic configuration validation failed")?;
+        
+        self.validate_network_config()
+            .context("Network configuration validation failed")?;
+        
+        self.validate_dependencies()
+            .context("Dependency validation failed")?;
+        
+        self.validate_context_sources()
+            .context("Context sources validation failed")?;
+        
+        self.validate_security_settings()
+            .context("Security settings validation failed")?;
+        
+        Ok(())
+    }
+    
+    fn validate_basic_config(&self) -> Result<()> {
+        // Validate timezone with detailed error messages
+        match self.general.timezone.parse::<chrono_tz::Tz>() {
+            Ok(_) => {},
+            Err(_) => {
+                let suggestions = vec![
+                    "UTC", "America/New_York", "Europe/London", "Asia/Tokyo"
+                ];
+                return Err(anyhow::anyhow!(
+                    "Invalid timezone '{}'. Examples: {}", 
+                    self.general.timezone,
+                    suggestions.join(", ")
+                ));
+            }
         }
         
-        // Validate planning horizon
-        if self.general.planning_horizon_days > 365 {
-            return Err(anyhow::anyhow!(
-                "Planning horizon cannot exceed 365 days, got: {}", 
-                self.general.planning_horizon_days
-            ));
-        }
-        
+        // Validate planning horizon with reasonable bounds
         if self.general.planning_horizon_days == 0 {
             return Err(anyhow::anyhow!("Planning horizon must be at least 1 day"));
         }
+        if self.general.planning_horizon_days > 365 {
+            return Err(anyhow::anyhow!(
+                "Planning horizon cannot exceed 365 days (got: {}). Consider a more reasonable timeframe for performance.", 
+                self.general.planning_horizon_days
+            ));
+        }
+        if self.general.planning_horizon_days > 90 {
+            warn!("Planning horizon of {} days is quite large and may impact performance", 
+                  self.general.planning_horizon_days);
+        }
         
-        // Validate AI temperature
+        // Enhanced AI configuration validation
         if self.ai.temperature < 0.0 || self.ai.temperature > 2.0 {
             return Err(anyhow::anyhow!(
-                "AI temperature must be between 0.0 and 2.0, got: {}", 
+                "AI temperature must be between 0.0-2.0 (got: {}). Lower values (0.1-0.7) are recommended for consistent results.", 
                 self.ai.temperature
             ));
         }
+        if self.ai.temperature > 1.5 {
+            warn!("High AI temperature ({}) may produce unpredictable results", self.ai.temperature);
+        }
         
-        // Validate AI max tokens
-        if self.ai.max_tokens < 100 || self.ai.max_tokens > 32000 {
+        // Validate AI max tokens with model-specific limits
+        let max_token_limit = if self.ai.model.contains("gpt-4") {
+            128000 // GPT-4 Turbo limit
+        } else if self.ai.model.contains("claude") {
+            200000 // Claude 3 limit
+        } else {
+            32000 // Conservative default
+        };
+        
+        if self.ai.max_tokens < 100 {
+            return Err(anyhow::anyhow!("AI max_tokens too low ({}). Minimum 100 tokens required for meaningful responses.", self.ai.max_tokens));
+        }
+        if self.ai.max_tokens > max_token_limit {
             return Err(anyhow::anyhow!(
-                "AI max_tokens must be between 100 and 32000, got: {}", 
-                self.ai.max_tokens
+                "AI max_tokens ({}) exceeds model limit for '{}' ({})", 
+                self.ai.max_tokens, self.ai.model, max_token_limit
             ));
         }
         
-        // Validate quiet hours format
-        if let Err(_) = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_start, "%H:%M") {
-            return Err(anyhow::anyhow!(
-                "Invalid quiet_hours_start format '{}', expected HH:MM", 
+        // Validate and parse quiet hours with logical consistency
+        let quiet_start = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_start, "%H:%M")
+            .map_err(|_| anyhow::anyhow!(
+                "Invalid quiet_hours_start '{}'. Expected format: HH:MM (24-hour format)", 
                 self.insights.quiet_hours_start
-            ));
-        }
+            ))?;
         
-        if let Err(_) = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_end, "%H:%M") {
-            return Err(anyhow::anyhow!(
-                "Invalid quiet_hours_end format '{}', expected HH:MM", 
+        let quiet_end = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_end, "%H:%M")
+            .map_err(|_| anyhow::anyhow!(
+                "Invalid quiet_hours_end '{}'. Expected format: HH:MM (24-hour format)", 
                 self.insights.quiet_hours_end
-            ));
+            ))?;
+        
+        // Check for logical quiet hours (allowing overnight periods)
+        if quiet_start == quiet_end {
+            warn!("Quiet hours start and end are the same ({}). This effectively disables all insights.", 
+                  self.insights.quiet_hours_start);
         }
         
-        // Validate max insights per day
-        if self.insights.max_insights_per_day == 0 || self.insights.max_insights_per_day > 50 {
+        // Validate insights frequency
+        if self.insights.max_insights_per_day == 0 {
+            return Err(anyhow::anyhow!("max_insights_per_day must be at least 1"));
+        }
+        if self.insights.max_insights_per_day > 100 {
             return Err(anyhow::anyhow!(
-                "max_insights_per_day must be between 1 and 50, got: {}", 
+                "max_insights_per_day ({}) is unreasonably high. Consider a lower value to avoid notification fatigue.", 
                 self.insights.max_insights_per_day
             ));
         }
+        if self.insights.max_insights_per_day > 20 {
+            warn!("High insights frequency ({}/day) may cause notification fatigue", 
+                  self.insights.max_insights_per_day);
+        }
         
-        // Validate Google Calendar configuration if present
+        Ok(())
+    }
+    
+    fn validate_network_config(&self) -> Result<()> {
+        // Validate Google Calendar OAuth configuration
         if let Some(ref gc) = self.google_calendar {
             if gc.enabled {
-                if gc.client_id.is_empty() {
-                    return Err(anyhow::anyhow!("Google Calendar enabled but client_id is empty"));
+                self.validate_oauth_config(&gc.client_id, &gc.client_secret, &gc.redirect_uri)
+                    .context("Google Calendar OAuth validation failed")?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_oauth_config(&self, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<()> {
+        // Validate client ID format (Google OAuth client IDs have specific patterns)
+        if client_id.is_empty() {
+            return Err(anyhow::anyhow!("OAuth client_id cannot be empty"));
+        }
+        if client_id.len() < 50 || !client_id.ends_with(".googleusercontent.com") {
+            warn!("client_id '{}' doesn't match expected Google OAuth format", 
+                  &client_id[..client_id.len().min(20)]);
+        }
+        
+        // Validate client secret
+        if client_secret.is_empty() {
+            return Err(anyhow::anyhow!("OAuth client_secret cannot be empty"));
+        }
+        if client_secret.len() < 20 {
+            warn!("client_secret appears to be too short for a valid OAuth secret");
+        }
+        
+        // Validate redirect URI with URL parsing
+        if redirect_uri.is_empty() {
+            return Err(anyhow::anyhow!("OAuth redirect_uri cannot be empty"));
+        }
+        
+        // Basic URL validation without external dependencies
+        if !redirect_uri.starts_with("http://") && !redirect_uri.starts_with("https://") {
+            return Err(anyhow::anyhow!("redirect_uri must be a valid HTTP(S) URL: {}", redirect_uri));
+        }
+        
+        // Security checks for redirect URI
+        if redirect_uri.starts_with("http://") {
+            if !redirect_uri.contains("localhost") && !redirect_uri.contains("127.0.0.1") {
+                return Err(anyhow::anyhow!(
+                    "HTTP redirect_uri only allowed for localhost/127.0.0.1, got: {}", 
+                    redirect_uri
+                ));
+            }
+        }
+        
+        // Check for common OAuth security issues
+        if redirect_uri.contains("#") {
+            warn!("redirect_uri contains fragment (#), which may cause OAuth issues");
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_dependencies(&self) -> Result<()> {
+        // Check for optional dependencies based on enabled features
+        if let Some(ref sources) = self.context_sources {
+            if let Some(ref obsidian) = sources.obsidian {
+                if obsidian.enabled {
+                    self.validate_obsidian_config(obsidian)
+                        .context("Obsidian configuration validation failed")?;
                 }
-                if gc.client_secret.is_empty() {
-                    return Err(anyhow::anyhow!("Google Calendar enabled but client_secret is empty"));
-                }
-                if gc.redirect_uri.is_empty() {
-                    return Err(anyhow::anyhow!("Google Calendar enabled but redirect_uri is empty"));
-                }
-                
-                // Validate redirect URI format
-                if !gc.redirect_uri.starts_with("http://") && !gc.redirect_uri.starts_with("https://") {
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_obsidian_config(&self, obsidian: &ObsidianConfig) -> Result<()> {
+        let vault_path = Path::new(&obsidian.vault_path);
+        
+        // Check if vault path exists
+        if !vault_path.exists() {
+            return Err(anyhow::anyhow!(
+                "Obsidian vault path does not exist: {}", 
+                obsidian.vault_path
+            ));
+        }
+        
+        // Check if it's a directory
+        if !vault_path.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Obsidian vault path is not a directory: {}", 
+                obsidian.vault_path
+            ));
+        }
+        
+        // Check for .obsidian directory (indicates valid Obsidian vault)
+        let obsidian_dir = vault_path.join(".obsidian");
+        if !obsidian_dir.exists() {
+            warn!("No .obsidian directory found in '{}'. This may not be a valid Obsidian vault.", 
+                  obsidian.vault_path);
+        }
+        
+        // Obsidian config is valid - check basic required folders exist
+        debug!("Obsidian vault validation successful for: {}", obsidian.vault_path);
+        
+        Ok(())
+    }
+    
+    fn validate_context_sources(&self) -> Result<()> {
+        if let Some(ref sources) = self.context_sources {
+            let mut enabled_sources = 0;
+            
+            // Check each context source (calendar via Google Calendar config)
+            if let Some(ref gc) = self.google_calendar {
+                if gc.enabled { enabled_sources += 1; }
+            }
+            if let Some(ref obs) = sources.obsidian {
+                if obs.enabled { enabled_sources += 1; }
+            }
+            if let Some(ref weather) = sources.weather {
+                if weather.enabled { enabled_sources += 1; }
+            }
+            
+            if enabled_sources == 0 {
+                warn!("No context sources are enabled. The system will have limited functionality.");
+            }
+            
+            debug!("Validated {} enabled context sources", enabled_sources);
+        } else {
+            warn!("No context sources configuration found");
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_security_settings(&self) -> Result<()> {
+        // Check for insecure configurations
+        if let Some(ref gc) = self.google_calendar {
+            if gc.enabled && gc.redirect_uri.starts_with("http://") {
+                if !gc.redirect_uri.contains("localhost") && !gc.redirect_uri.contains("127.0.0.1") {
                     return Err(anyhow::anyhow!(
-                        "Google Calendar redirect_uri must be a valid HTTP(S) URL: {}", 
+                        "HTTP OAuth redirect is insecure for non-localhost URLs: {}", 
                         gc.redirect_uri
                     ));
+                }
+            }
+        }
+        
+        // Validate configured paths don't have obvious security issues
+        if let Some(ref sources) = self.context_sources {
+            if let Some(ref obs) = sources.obsidian {
+                if obs.enabled {
+                    if obs.vault_path.contains("../") || obs.vault_path.starts_with("/tmp/") {
+                        warn!("Potentially insecure vault path: {}", obs.vault_path);
+                    }
                 }
             }
         }

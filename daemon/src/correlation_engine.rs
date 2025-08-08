@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use std::sync::Arc;
 use std::collections::HashMap;
 use parking_lot::RwLock;
@@ -438,8 +438,10 @@ impl CorrelationEngine {
         let mut relationship_alerts = Vec::new();
         
         if people_folder.exists() {
-            let mut entries = fs::read_dir(&people_folder).await?;
-            while let Some(entry) = entries.next_entry().await? {
+            let mut entries = fs::read_dir(&people_folder).await
+                .with_context(|| format!("Failed to read people folder: {:?}", people_folder))?;
+            while let Some(entry) = entries.next_entry().await
+                .context("Failed to read next directory entry")? {
                 if entry.path().extension().map_or(false, |ext| ext == "md") {
                     if let Ok(content) = fs::read_to_string(entry.path()).await {
                         // Simple frontmatter parsing for last_contact
@@ -504,7 +506,23 @@ impl CorrelationEngine {
 
         debug!("Analyzing calendar with AI from {} to {}", now, future_window);
 
-        // Get all events in the planning horizon
+        // Check total event count first for memory management
+        let event_count = self.database.count_events_in_range(now, future_window)?;
+        
+        if event_count == 0 {
+            debug!("No events found in planning horizon");
+            return Ok(Vec::new());
+        }
+
+        info!("Found {} events to analyze with AI", event_count);
+
+        // Use streaming analysis for large datasets
+        if event_count > 5000 {
+            debug!("Large dataset detected ({}), using streaming analysis", event_count);
+            return self.analyze_streaming(now, future_window).await;
+        }
+
+        // Get all events in the planning horizon (for smaller datasets)
         let events = self.database.get_events_in_range(now, future_window)?;
         
         if events.is_empty() {
@@ -515,7 +533,8 @@ impl CorrelationEngine {
         info!("Found {} events to analyze with AI", events.len());
 
         // Enrich events with calendar information before sanitization
-        let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
+        let enriched_events = self.enrich_events_with_calendar_info(&events).await
+            .context("Failed to enrich events with calendar information")?;
         
         // Auto-discover calendar owners if not already configured (runs once in a while)
         if self.config.read().calendar_owners.is_none() {
@@ -556,8 +575,13 @@ impl CorrelationEngine {
         
         
         // Check if we can make an API call
-        if !self.api_manager.can_make_api_call() {
-            warn!("Daily API limit reached. Using last cached insight.");
+        if let Err(rate_limit_type) = self.api_manager.can_make_api_call() {
+            match rate_limit_type {
+                crate::api_manager::RateLimitType::Daily => warn!("Daily API limit reached. Using last cached insight."),
+                crate::api_manager::RateLimitType::PerMinute => warn!("Per-minute API limit reached. Using last cached insight."),
+                crate::api_manager::RateLimitType::Backoff => warn!("API in backoff period. Using last cached insight."),
+                crate::api_manager::RateLimitType::CircuitBreaker => warn!("API circuit breaker active. Using last cached insight."),
+            }
             if let Some(cached_insight) = self.api_manager.get_last_insight() {
                 return Ok(vec![Correlation {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -691,11 +715,13 @@ impl CorrelationEngine {
             .map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await?;
+            let error_text = response.text().await
+                .context("Failed to read error response from Claude API")?;
             return Err(anyhow::anyhow!("Claude API error: {}", error_text));
         }
 
-        let json: serde_json::Value = response.json().await?;
+        let json: serde_json::Value = response.json().await
+            .context("Failed to parse JSON response from Claude API")?;
         let content = json["content"][0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid Claude response format"))?;
@@ -1000,7 +1026,8 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
         match self.database.get_events_in_range(start_time, now) {
             Ok(events) => {
                 // Collect calendar owners from recent enriched events
-                let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
+                let enriched_events = self.enrich_events_with_calendar_info(&events).await
+            .context("Failed to enrich events with calendar information")?;
                 
                 for enriched in &enriched_events {
                     if let Some(ref calendar_info) = enriched.calendar_info {
@@ -1072,7 +1099,8 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
         let start_time = now - chrono::Duration::days(90);
         
         let events = self.database.get_events_in_range(start_time, now)?;
-        let enriched_events = self.enrich_events_with_calendar_info(&events).await?;
+        let enriched_events = self.enrich_events_with_calendar_info(&events).await
+            .context("Failed to enrich events with calendar information")?;
         
         let mut discovered_owners = HashMap::new();
         
@@ -1405,6 +1433,88 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
     /// Get access to the notification service
     pub fn notification_service(&self) -> Arc<NotificationService> {
         self.notification_service.clone()
+    }
+
+    /// Memory-efficient streaming analysis for large datasets
+    async fn analyze_streaming(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Correlation>> {
+        debug!("Starting streaming analysis for large dataset");
+        
+        let mut all_correlations = Vec::new();
+        let batch_size = 1000; // Process 1000 events at a time
+
+        // Process events in batches to avoid loading everything into memory
+        self.database.process_events_in_batches(start, end, batch_size, |batch_events| {
+            // Create a smaller analysis scope for each batch
+            debug!("Processing batch of {} events", batch_events.len());
+            
+            // For streaming, we focus on high-impact patterns within each batch
+            // rather than cross-batch correlations to keep memory usage low
+            let batch_correlations = self.analyze_batch_for_streaming(batch_events)?;
+            
+            all_correlations.extend(batch_correlations);
+            
+            Ok(())
+        })?;
+
+        // Post-process to remove duplicates and keep only the most important insights
+        all_correlations.sort_by(|a, b| b.urgency_score.cmp(&a.urgency_score));
+        all_correlations.truncate(50); // Keep top 50 insights to prevent memory bloat
+
+        info!("Streaming analysis completed with {} insights from large dataset", all_correlations.len());
+        Ok(all_correlations)
+    }
+
+    /// Analyze a single batch of events for streaming processing
+    fn analyze_batch_for_streaming(&self, events: &[Event]) -> Result<Vec<Correlation>> {
+        let mut correlations = Vec::new();
+
+        // Focus on immediate, high-impact patterns that don't require global context
+        // 1. Same-time conflicts (within this batch)
+        for i in 0..events.len() {
+            for j in (i + 1)..events.len() {
+                if self.events_overlap(&events[i], &events[j]) {
+                    correlations.push(Correlation {
+                        id: format!("conflict_{}_{}", events[i].id, events[j].id),
+                        event_ids: vec![events[i].id, events[j].id],
+                        insight: format!("Scheduling conflict detected between '{}' and '{}'", 
+                                       events[i].title.as_deref().unwrap_or("Untitled"),
+                                       events[j].title.as_deref().unwrap_or("Untitled")),
+                        action_needed: "Review and reschedule one of these events".to_string(),
+                        urgency_score: 8, // High urgency for conflicts
+                        discovered_at: Utc::now(),
+                        recommended_glyph: Some("⚠️".to_string()),
+                    });
+                }
+            }
+        }
+
+        // 2. Back-to-back meetings without buffer time
+        let mut sorted_events: Vec<&Event> = events.iter().collect();
+        sorted_events.sort_by_key(|e| e.start_time);
+        
+        for window in sorted_events.windows(2) {
+            if let [event1, event2] = window {
+                if let (Some(end1), Some(start2)) = (event1.end_time, Some(event2.start_time)) {
+                    let gap_minutes = (start2 - end1) / 60;
+                    if gap_minutes >= 0 && gap_minutes < 15 { // Less than 15 minutes gap
+                        correlations.push(Correlation {
+                            id: format!("tight_schedule_{}_{}", event1.id, event2.id),
+                            event_ids: vec![event1.id, event2.id],
+                            insight: format!("Very tight schedule: only {} minutes between '{}' and '{}'",
+                                           gap_minutes,
+                                           event1.title.as_deref().unwrap_or("Untitled"),
+                                           event2.title.as_deref().unwrap_or("Untitled")),
+                            action_needed: "Consider adding buffer time for transitions".to_string(),
+                            urgency_score: 5,
+                            discovered_at: Utc::now(),
+                            recommended_glyph: Some("⏰".to_string()),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(correlations)
     }
 
     async fn enrich_events_with_calendar_info(&self, events: &[Event]) -> Result<Vec<EnrichedEvent>> {

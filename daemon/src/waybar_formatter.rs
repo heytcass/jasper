@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use chrono_tz::Tz;
 use crate::database::Correlation;
@@ -34,7 +34,7 @@ impl WaybarFormatter {
         // but we'll take the first one (or highest priority if multiple)
         let primary_correlation = correlations.iter()
             .max_by_key(|c| c.urgency_score)
-            .unwrap();
+            .ok_or_else(|| anyhow!("No correlations provided for formatting"))?;
 
         // Use AI-recommended glyph or fallback to default
         let icon = self.get_display_icon(primary_correlation);
@@ -128,7 +128,7 @@ impl WaybarFormatter {
 
         let primary_correlation = correlations.iter()
             .max_by_key(|c| c.urgency_score)
-            .unwrap();
+            .expect("correlations.is_empty() check above ensures at least one correlation");
 
         let icon = self.get_display_icon(primary_correlation);
         format!("{} {}", icon, self.truncate_text(&primary_correlation.insight, 80))

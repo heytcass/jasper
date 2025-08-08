@@ -61,7 +61,7 @@ impl GnomeFrontendFormatter {
         // Use the highest urgency insight's icon
         let primary_insight = insights.iter()
             .max_by_key(|i| i.urgency_score)
-            .unwrap();
+            .expect("insights.is_empty() check above ensures at least one insight");
             
         primary_insight.recommended_icon
             .as_deref()

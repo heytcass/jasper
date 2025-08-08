@@ -70,16 +70,37 @@ impl DatabaseInner {
 
         let connection = Connection::open(db_path)
             .with_context(|| format!("Failed to open database: {:?}", db_path))?;
+            
+        // Configure connection for optimal performance and resilience
+        Self::configure_connection(&connection)
+            .context("Failed to configure initial database connection")?;
 
         let db = Arc::new(DatabaseInner {
             connection: Mutex::new(connection),
             db_path: db_path.clone(),
         });
 
-        db.run_migrations().await?;
+        db.run_migrations().await
+            .context("Failed to run database migrations")?;
         info!("Database initialized at {:?}", db_path);
 
         Ok(db)
+    }
+    
+    /// Configure a SQLite connection with optimal settings for performance and resilience
+    fn configure_connection(connection: &Connection) -> Result<()> {
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = 1000000;
+             PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA busy_timeout = 30000;
+             PRAGMA wal_autocheckpoint = 1000;
+             PRAGMA mmap_size = 268435456;
+             PRAGMA optimize;"
+        ).context("Failed to execute PRAGMA configuration statements")?;
+        Ok(())
     }
     
     /// Recover from database connection issues by reopening the connection
@@ -89,14 +110,9 @@ impl DatabaseInner {
         let new_connection = Connection::open(&self.db_path)
             .with_context(|| format!("Failed to reopen database: {:?}", self.db_path))?;
             
-        // Configure the connection with the same settings
-        new_connection.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = 1000000;
-             PRAGMA foreign_keys = ON;
-             PRAGMA temp_store = MEMORY;"
-        ).context("Failed to configure recovered database connection")?;
+        // Configure the connection with optimized settings for resilience
+        Self::configure_connection(&new_connection)
+            .context("Failed to configure recovered database connection")?;
         
         let mut conn_guard = self.connection.lock();
         *conn_guard = new_connection;
@@ -138,10 +154,19 @@ impl DatabaseInner {
     /// Check if an error indicates a connection issue
     fn is_connection_error(&self, error: &anyhow::Error) -> bool {
         let error_msg = error.to_string().to_lowercase();
+        
+        // SQLite connection-related errors
         error_msg.contains("database is locked") ||
         error_msg.contains("disk i/o error") ||
         error_msg.contains("database disk image is malformed") ||
-        error_msg.contains("not a database")
+        error_msg.contains("not a database") ||
+        error_msg.contains("database is busy") ||
+        error_msg.contains("cannot open database") ||
+        error_msg.contains("unable to open database file") ||
+        error_msg.contains("sql logic error") ||
+        error_msg.contains("database or disk is full") ||
+        error_msg.contains("file is not a database") ||
+        error_msg.contains("attempt to write a readonly database")
     }
 
     async fn run_migrations(&self) -> Result<()> {
@@ -210,6 +235,20 @@ impl DatabaseInner {
             "CREATE INDEX IF NOT EXISTS idx_events_calendar_start_time ON events(calendar_id, start_time)",
             [],
         )?;
+        
+        // Additional indexes for common query patterns identified by senior code review
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_time_range ON events(start_time, end_time)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_source_id ON events(source_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_end_time ON events(end_time)",
+            [],
+        )?;
 
         // Create tasks table
         conn.execute(
@@ -229,6 +268,23 @@ impl DatabaseInner {
             [],
         )?;
 
+        // Indexes for tasks table to optimize common queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_account_id ON tasks(account_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_source_id ON tasks(source_id)",
+            [],
+        )?;
 
         // Create event_relationships table
         conn.execute(
@@ -245,6 +301,20 @@ impl DatabaseInner {
             [],
         )?;
 
+        // Indexes for event_relationships table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_relationships_event1 ON event_relationships(event1_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_relationships_event2 ON event_relationships(event2_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_relationships_type ON event_relationships(relationship_type)",
+            [],
+        )?;
+
         // Create user_patterns table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS user_patterns (
@@ -258,102 +328,136 @@ impl DatabaseInner {
             [],
         )?;
 
-        info!("Database migrations completed");
+        // Indexes for user_patterns table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_patterns_type ON user_patterns(pattern_type)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_patterns_last_seen ON user_patterns(last_seen)",
+            [],
+        )?;
+        
+        // Additional indexes for calendars table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calendars_account_id ON calendars(account_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calendars_calendar_id ON calendars(calendar_id)",
+            [],
+        )?;
+
+        info!("Database migrations completed with comprehensive indexes");
         Ok(())
     }
 
     pub fn get_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Event>> {
-        let conn = self.connection.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, source_id, calendar_id, title, description, start_time, end_time, 
-                    location, event_type, participants, raw_data_json, is_all_day
-             FROM events 
-             WHERE start_time >= ? AND start_time <= ?
-             ORDER BY start_time"
-        )?;
+        // Use pagination internally to limit memory usage
+        self.get_events_in_range_paginated(start, end, None, None)
+    }
 
-        let events = stmt.query_map(
-            params![start.timestamp(), end.timestamp()],
-            |row| {
-                Ok(Event {
-                    id: row.get(0)?,
-                    source_id: row.get(1)?,
-                    calendar_id: row.get(2)?,
-                    title: row.get(3)?,
-                    description: row.get(4)?,
-                    start_time: row.get(5)?,
-                    end_time: row.get(6)?,
-                    location: row.get(7)?,
-                    event_type: row.get(8)?,
-                    participants: row.get(9)?,
-                    raw_data_json: row.get(10)?,
-                    is_all_day: row.get::<_, Option<i32>>(11)?.map(|v| v != 0),
-                })
+    /// Get events in range with pagination support for large datasets
+    pub fn get_events_in_range_paginated(&self, start: DateTime<Utc>, end: DateTime<Utc>, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<Event>> {
+        self.with_connection_retry(|conn| {
+            let base_query = "SELECT id, source_id, calendar_id, title, description, start_time, end_time, 
+                                    location, event_type, participants, raw_data_json, is_all_day
+                             FROM events 
+                             WHERE start_time >= ? AND start_time <= ?
+                             ORDER BY start_time";
+            
+            let query = match (limit, offset) {
+                (Some(limit), Some(offset)) => format!("{} LIMIT {} OFFSET {}", base_query, limit, offset),
+                (Some(limit), None) => format!("{} LIMIT {}", base_query, limit),
+                (None, Some(offset)) => format!("{} OFFSET {}", base_query, offset),
+                (None, None) => {
+                    // Default limit to prevent excessive memory usage
+                    format!("{} LIMIT 10000", base_query)
+                }
+            };
+
+            let mut stmt = conn.prepare(&query)?;
+
+            let events = stmt.query_map(
+                params![start.timestamp(), end.timestamp()],
+                |row| {
+                    Ok(Event {
+                        id: row.get(0)?,
+                        source_id: row.get(1)?,
+                        calendar_id: row.get(2)?,
+                        title: row.get(3)?,
+                        description: row.get(4)?,
+                        start_time: row.get(5)?,
+                        end_time: row.get(6)?,
+                        location: row.get(7)?,
+                        event_type: row.get(8)?,
+                        participants: row.get(9)?,
+                        raw_data_json: row.get(10)?,
+                        is_all_day: row.get::<_, Option<i32>>(11)?.map(|v| v != 0),
+                    })
+                }
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(events)
+        })
+    }
+
+    /// Process events in batches to avoid loading large datasets into memory
+    pub fn process_events_in_batches<F>(&self, start: DateTime<Utc>, end: DateTime<Utc>, batch_size: usize, mut processor: F) -> Result<()>
+    where
+        F: FnMut(&[Event]) -> Result<()>,
+    {
+        const DEFAULT_BATCH_SIZE: usize = 1000;
+        let batch_size = if batch_size == 0 { DEFAULT_BATCH_SIZE } else { batch_size };
+        
+        let mut offset = 0;
+        
+        loop {
+            let events = self.get_events_in_range_paginated(start, end, Some(batch_size), Some(offset))?;
+            
+            if events.is_empty() {
+                break; // No more events to process
             }
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
+            
+            // Process this batch
+            processor(&events)?;
+            
+            // If we got fewer events than the batch size, we're at the end
+            if events.len() < batch_size {
+                break;
+            }
+            
+            offset += batch_size;
+        }
+        
+        Ok(())
+    }
 
-        Ok(events)
+    /// Count total events in range without loading them into memory
+    pub fn count_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<i64> {
+        self.with_connection_retry(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT COUNT(*) FROM events 
+                 WHERE start_time >= ? AND start_time <= ?"
+            )?;
+            
+            let count: i64 = stmt.query_row(
+                params![start.timestamp(), end.timestamp()],
+                |row| Ok(row.get(0)?)
+            )?;
+            
+            Ok(count)
+        })
     }
 
     pub async fn create_event(&self, event: &Event) -> Result<i64> {
-        let conn = self.connection.lock();
-        let _result = conn.execute(
-            "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
-                                location, event_type, participants, raw_data_json, is_all_day)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                event.source_id,
-                event.calendar_id,
-                event.title,
-                event.description,
-                event.start_time,
-                event.end_time,
-                event.location,
-                event.event_type,
-                event.participants,
-                event.raw_data_json,
-                event.is_all_day.map(|v| if v { 1 } else { 0 }),
-            ],
-        )?;
-        
-        Ok(conn.last_insert_rowid())
-    }
-
-    /// Bulk create events with deduplication check and transaction handling
-    pub async fn create_events_bulk(&self, events: &[Event]) -> Result<Vec<i64>> {
-        let conn = self.connection.lock();
-        let mut event_ids = Vec::with_capacity(events.len());
-        
-        // Use a transaction for bulk operations
-        let tx = conn.unchecked_transaction()?;
-        
-        {
-            // Prepare statements for better performance (scoped to drop before commit)
-            let mut insert_stmt = tx.prepare(
+        self.with_connection_retry(|conn| {
+            let _result = conn.execute(
                 "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
                                     location, event_type, participants, raw_data_json, is_all_day)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )?;
-            
-            let mut check_stmt = tx.prepare(
-                "SELECT id FROM events WHERE source_id = ?"
-            )?;
-            
-            for event in events {
-                // Check if event already exists
-                let existing: Option<i64> = check_stmt.query_row(
-                    params![event.source_id],
-                    |row| Ok(row.get(0)?)
-                ).optional()?;
-                
-                if existing.is_some() {
-                    debug!("Event {} already exists during bulk insert, skipping", event.source_id);
-                    continue;
-                }
-                
-                // Insert new event
-                insert_stmt.execute(params![
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
                     event.source_id,
                     event.calendar_id,
                     event.title,
@@ -365,50 +469,104 @@ impl DatabaseInner {
                     event.participants,
                     event.raw_data_json,
                     event.is_all_day.map(|v| if v { 1 } else { 0 }),
-                ])?;
+                ],
+            )?;
+            
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    /// Bulk create events with deduplication check and transaction handling
+    pub async fn create_events_bulk(&self, events: &[Event]) -> Result<Vec<i64>> {
+        self.with_connection_retry(|conn| {
+            let mut event_ids = Vec::with_capacity(events.len());
+            
+            // Use a transaction for bulk operations
+            let tx = conn.unchecked_transaction()?;
+            
+            {
+                // Prepare statements for better performance (scoped to drop before commit)
+                let mut insert_stmt = tx.prepare(
+                    "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
+                                        location, event_type, participants, raw_data_json, is_all_day)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )?;
                 
-                event_ids.push(tx.last_insert_rowid());
+                let mut check_stmt = tx.prepare(
+                    "SELECT id FROM events WHERE source_id = ?"
+                )?;
+                
+                for event in events {
+                    // Check if event already exists
+                    let existing: Option<i64> = check_stmt.query_row(
+                        params![event.source_id],
+                        |row| Ok(row.get(0)?)
+                    ).optional()?;
+                    
+                    if existing.is_some() {
+                        debug!("Event {} already exists during bulk insert, skipping", event.source_id);
+                        continue;
+                    }
+                    
+                    // Insert new event
+                    insert_stmt.execute(params![
+                        event.source_id,
+                        event.calendar_id,
+                        event.title,
+                        event.description,
+                        event.start_time,
+                        event.end_time,
+                        event.location,
+                        event.event_type,
+                        event.participants,
+                        event.raw_data_json,
+                        event.is_all_day.map(|v| if v { 1 } else { 0 }),
+                    ])?;
+                    
+                    event_ids.push(tx.last_insert_rowid());
+                }
             }
-        }
-        
-        // Commit the transaction (statements are dropped, so no borrow issue)
-        tx.commit()?;
-        
-        Ok(event_ids)
+            
+            // Commit the transaction (statements are dropped, so no borrow issue)
+            tx.commit()?;
+            
+            Ok(event_ids)
+        })
     }
 
     /// Check which events already exist by source_id (for pre-filtering)
     pub fn get_existing_source_ids(&self, source_ids: &[String]) -> Result<HashSet<String>> {
-        let conn = self.connection.lock();
-        let mut existing = HashSet::new();
-        
-        if source_ids.is_empty() {
-            return Ok(existing);
-        }
-        
-        // Use safe batch processing instead of dynamic SQL construction
-        // Process in chunks to avoid hitting SQLite parameter limits
-        const BATCH_SIZE: usize = 999; // SQLite default parameter limit is 999
-        
-        for chunk in source_ids.chunks(BATCH_SIZE) {
-            // Build parameterized query with exact number of placeholders
-            let placeholders = "?,".repeat(chunk.len());
-            let placeholders = &placeholders[..placeholders.len()-1]; // Remove trailing comma
-            let query = format!("SELECT source_id FROM events WHERE source_id IN ({})", placeholders);
+        self.with_connection_retry(|conn| {
+            let mut existing = HashSet::new();
             
-            let mut stmt = conn.prepare(&query)?;
-            let params: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            
-            let rows = stmt.query_map(&params[..], |row| {
-                Ok(row.get::<_, String>(0)?)
-            })?;
-            
-            for row in rows {
-                existing.insert(row?);
+            if source_ids.is_empty() {
+                return Ok(existing);
             }
-        }
-        
-        Ok(existing)
+            
+            // Use safe batch processing instead of dynamic SQL construction
+            // Process in chunks to avoid hitting SQLite parameter limits
+            const BATCH_SIZE: usize = 999; // SQLite default parameter limit is 999
+            
+            for chunk in source_ids.chunks(BATCH_SIZE) {
+                // Build parameterized query with exact number of placeholders
+                let placeholders = "?,".repeat(chunk.len());
+                let placeholders = &placeholders[..placeholders.len()-1]; // Remove trailing comma
+                let query = format!("SELECT source_id FROM events WHERE source_id IN ({})", placeholders);
+                
+                let mut stmt = conn.prepare(&query)?;
+                let params: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+                
+                let rows = stmt.query_map(&params[..], |row| {
+                    Ok(row.get::<_, String>(0)?)
+                })?;
+                
+                for row in rows {
+                    existing.insert(row?);
+                }
+            }
+            
+            Ok(existing)
+        })
     }
 
     pub fn get_event_by_source_id(&self, source_id: &str) -> Result<Option<Event>> {

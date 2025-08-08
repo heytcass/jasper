@@ -54,6 +54,8 @@ struct GoogleCalendarListEntry {
 #[derive(Debug, Deserialize)]
 struct GoogleEventsResponse {
     items: Option<Vec<GoogleEvent>>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -225,7 +227,7 @@ impl GoogleCalendarService {
         Ok(token)
     }
 
-    /// Fetch calendar events using Google Calendar REST API directly
+    /// Fetch calendar events using Google Calendar REST API directly with pagination support
     async fn fetch_calendar_events_rest(
         &self,
         access_token: &str,
@@ -233,39 +235,76 @@ impl GoogleCalendarService {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<Vec<Event>> {
+        self.fetch_calendar_events_rest_paginated(access_token, calendar_id, start_time, end_time, None).await
+    }
+
+    /// Fetch calendar events with pagination support and optional limits for memory management
+    async fn fetch_calendar_events_rest_paginated(
+        &self,
+        access_token: &str,
+        calendar_id: &str,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+        max_events: Option<usize>,
+    ) -> Result<Vec<Event>> {
         let url = format!(
             "https://www.googleapis.com/calendar/v3/calendars/{}/events",
             urlencoding::encode(calendar_id)
         );
 
-        let response = self.http_client
-            .get(&url)
-            .bearer_auth(access_token)
-            .query(&[
-                ("timeMin", &start_time.to_rfc3339()),
-                ("timeMax", &end_time.to_rfc3339()),
-                ("singleEvents", &"true".to_string()),
-                ("orderBy", &"startTime".to_string()),
-                ("maxResults", &"250".to_string()),
-            ])
-            .send()
-            .await
-            .map_err(|e| anyhow!("Google Calendar API request failed: {}", e))?;
+        let mut all_converted_events = Vec::new();
+        let mut next_page_token: Option<String> = None;
+        let page_size = 250; // Google Calendar API max
+        
+        loop {
+            let mut query_params = vec![
+                ("timeMin", start_time.to_rfc3339()),
+                ("timeMax", end_time.to_rfc3339()),
+                ("singleEvents", "true".to_string()),
+                ("orderBy", "startTime".to_string()),
+                ("maxResults", page_size.to_string()),
+            ];
+            
+            // Add pagination token if we have one
+            if let Some(ref token) = next_page_token {
+                query_params.push(("pageToken", token.clone()));
+            }
 
-        let response = handle_google_api_response(response).await?;
-        let events_response: GoogleEventsResponse = parse_json_response(response, "Google Calendar events response").await?;
+            let response = self.http_client
+                .get(&url)
+                .bearer_auth(access_token)
+                .query(&query_params)
+                .send()
+                .await
+                .map_err(|e| anyhow!("Google Calendar API request failed: {}", e))?;
 
-        let mut converted_events = Vec::new();
+            let response = handle_google_api_response(response).await?;
+            let events_response: GoogleEventsResponse = parse_json_response(response, "Google Calendar events response").await?;
 
-        if let Some(items) = events_response.items {
-            for gcal_event in items {
-                if let Ok(event) = self.convert_google_event_rest(gcal_event, calendar_id).await {
-                    converted_events.push(event);
+            // Process events from this page
+            if let Some(items) = events_response.items {
+                for gcal_event in items {
+                    if let Ok(event) = self.convert_google_event_rest(gcal_event, calendar_id).await {
+                        all_converted_events.push(event);
+                        
+                        // Check if we've reached the maximum number of events
+                        if let Some(max) = max_events {
+                            if all_converted_events.len() >= max {
+                                return Ok(all_converted_events);
+                            }
+                        }
+                    }
                 }
+            }
+
+            // Check if there are more pages
+            next_page_token = events_response.next_page_token;
+            if next_page_token.is_none() {
+                break; // No more pages
             }
         }
 
-        Ok(converted_events)
+        Ok(all_converted_events)
     }
 
     async fn convert_google_event_rest(

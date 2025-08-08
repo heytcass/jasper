@@ -103,8 +103,12 @@ impl ObsidianVaultSource {
         let frontmatter_regex = Regex::new(r"^---\n(.*?)\n---\n(.*)$")?;
         
         if let Some(captures) = frontmatter_regex.captures(content) {
-            let yaml_content = captures.get(1).unwrap().as_str();
-            let markdown_content = captures.get(2).unwrap().as_str();
+            let yaml_content = captures.get(1)
+                .ok_or_else(|| anyhow!("Failed to extract YAML content from frontmatter"))?
+                .as_str();
+            let markdown_content = captures.get(2)
+                .ok_or_else(|| anyhow!("Failed to extract markdown content after frontmatter"))?
+                .as_str();
             
             match serde_yaml::from_str::<HashMap<String, serde_yaml::Value>>(yaml_content) {
                 Ok(yaml_map) => {
@@ -144,14 +148,19 @@ impl ObsidianVaultSource {
     }
     
     /// Extract tasks from markdown content
-    fn extract_tasks(content: &str, file_path: &Path) -> Vec<Task> {
+    fn extract_tasks(content: &str, file_path: &Path) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
-        let task_regex = Regex::new(r"^\s*- \[([ x])\] (.+)$").unwrap();
+        let task_regex = Regex::new(r"^\s*- \[([ x])\] (.+)$")
+            .map_err(|e| anyhow!("Failed to compile task regex: {}", e))?;
         
         for (line_num, line) in content.lines().enumerate() {
             if let Some(captures) = task_regex.captures(line) {
-                let is_completed = captures.get(1).unwrap().as_str() == "x";
-                let task_text = captures.get(2).unwrap().as_str();
+                let is_completed = captures.get(1)
+                    .ok_or_else(|| anyhow!("Failed to extract task status from: {}", line))?
+                    .as_str() == "x";
+                let task_text = captures.get(2)
+                    .ok_or_else(|| anyhow!("Failed to extract task text from: {}", line))?
+                    .as_str();
                 
                 let task_id = format!("{}:{}:{}", 
                     file_path.file_name().unwrap_or_default().to_string_lossy(), 
@@ -172,7 +181,7 @@ impl ObsidianVaultSource {
             }
         }
         
-        tasks
+        Ok(tasks)
     }
     
     /// Get daily notes for a date range
@@ -196,7 +205,7 @@ impl ObsidianVaultSource {
                 match async_fs::read_to_string(&file_path).await {
                     Ok(content) => {
                         let (frontmatter, markdown_content) = Self::parse_frontmatter(&content)?;
-                        let tasks = Self::extract_tasks(&markdown_content, &file_path);
+                        let tasks = Self::extract_tasks(&markdown_content, &file_path)?;
                         
                         // Extract mood and energy level from frontmatter or content
                         let mood = frontmatter.as_ref().and_then(|fm| fm.other.get("mood"))
@@ -205,10 +214,12 @@ impl ObsidianVaultSource {
                             .and_then(|v| v.as_i64()).map(|i| i as i32);
                         
                         // Extract focus areas from content
-                        let focus_areas = self.extract_focus_areas(&markdown_content);
+                        let focus_areas = self.extract_focus_areas(&markdown_content)?;
                         
                         daily_notes.push(DailyNote {
-                            date: current_date.and_hms_opt(9, 0, 0).unwrap().and_utc(),
+                            date: current_date.and_hms_opt(9, 0, 0)
+                                .ok_or_else(|| anyhow!("Failed to create datetime for date: {}", current_date))?
+                                .and_utc(),
                             title: filename,
                             content: markdown_content,
                             tasks,
@@ -223,14 +234,15 @@ impl ObsidianVaultSource {
                 }
             }
             
-            current_date = current_date.succ_opt().unwrap();
+            current_date = current_date.succ_opt()
+                .ok_or_else(|| anyhow!("Date overflow: cannot get next day after {}", current_date))?;
         }
         
         Ok(daily_notes)
     }
     
     /// Extract focus areas from content
-    fn extract_focus_areas(&self, content: &str) -> Vec<String> {
+    fn extract_focus_areas(&self, content: &str) -> Result<Vec<String>> {
         let mut focus_areas = Vec::new();
         
         // Look for common focus area patterns
@@ -243,12 +255,17 @@ impl ObsidianVaultSource {
         for pattern in focus_patterns {
             if let Ok(regex) = Regex::new(pattern) {
                 if let Some(captures) = regex.captures(content) {
-                    let focus_text = captures.get(1).unwrap().as_str();
+                    let focus_text = captures.get(1)
+                        .ok_or_else(|| anyhow!("Failed to extract focus text from line"))?
+                        .as_str();
                     // Extract list items
-                    let item_regex = Regex::new(r"^\s*[-*]\s+(.+)$").unwrap();
+                    let item_regex = Regex::new(r"^\s*[-*]\s+(.+)$")
+                        .map_err(|e| anyhow!("Failed to compile item regex: {}", e))?;
                     for line in focus_text.lines() {
                         if let Some(item_captures) = item_regex.captures(line) {
-                            let item = item_captures.get(1).unwrap().as_str();
+                            let item = item_captures.get(1)
+                                .ok_or_else(|| anyhow!("Failed to extract item text from line"))?
+                                .as_str();
                             focus_areas.push(item.to_string());
                         }
                     }
@@ -256,7 +273,7 @@ impl ObsidianVaultSource {
             }
         }
         
-        focus_areas
+        Ok(focus_areas)
     }
     
     /// Get active projects
@@ -292,14 +309,14 @@ impl ObsidianVaultSource {
                                 _ => ProjectStatus::Active, // Default
                             };
                             
-                            let tasks = Self::extract_tasks(&markdown_content, &path);
+                            let tasks = Self::extract_tasks(&markdown_content, &path)?;
                             
                             projects.push(Project {
                                 id: path.file_stem().unwrap_or_default().to_string_lossy().to_string(),
                                 name: project_name,
                                 description: None, // Could extract from content
                                 status,
-                                due_date: fm.due_date.map(|d| d.and_hms_opt(23, 59, 59).unwrap().and_utc()),
+                                due_date: fm.due_date.and_then(|d| d.and_hms_opt(23, 59, 59).map(|dt| dt.and_utc())),
                                 client: fm.client,
                                 priority: fm.priority.unwrap_or(5),
                                 progress: fm.progress.unwrap_or(0.0),
@@ -339,8 +356,8 @@ impl ObsidianVaultSource {
                         
                         if let Some(fm) = frontmatter {
                             if let Some(last_contact) = fm.last_contact {
-                                let last_contact_utc = last_contact.and_hms_opt(12, 0, 0).unwrap().and_utc();
-                                let days_since = now.signed_duration_since(last_contact_utc).num_days();
+                                if let Some(last_contact_utc) = last_contact.and_hms_opt(12, 0, 0).map(|dt| dt.and_utc()) {
+                                    let days_since = now.signed_duration_since(last_contact_utc).num_days();
                                 
                                 if days_since > self.config.relationship_alert_days {
                                     let relationship_type = match fm.relationship.as_deref() {
@@ -372,6 +389,7 @@ impl ObsidianVaultSource {
                                         urgency,
                                     });
                                 }
+                                }
                             }
                         }
                     }
@@ -397,12 +415,15 @@ impl ObsidianVaultSource {
         
         for daily_note in recent_daily_notes {
             // Extract meeting references and activities from daily note content
-            let meeting_regex = Regex::new(r"(?i)meeting\s+with\s+([^.]+)").unwrap();
-            let call_regex = Regex::new(r"(?i)call\s+with\s+([^.]+)").unwrap();
+            let meeting_regex = Regex::new(r"(?i)meeting\s+with\s+([^.]+)")
+                .map_err(|e| anyhow!("Failed to compile meeting regex: {}", e))?;
+            let call_regex = Regex::new(r"(?i)call\s+with\s+([^.]+)")
+                .map_err(|e| anyhow!("Failed to compile call regex: {}", e))?;
             
             for (line_num, line) in daily_note.content.lines().enumerate() {
                 if let Some(captures) = meeting_regex.captures(line) {
-                    let person = captures.get(1).unwrap().as_str();
+                    if let Some(person_match) = captures.get(1) {
+                        let person = person_match.as_str();
                     activities.push(Activity {
                         id: format!("{}:meeting:{}", daily_note.date.format("%Y-%m-%d"), line_num),
                         title: format!("Meeting with {}", person),
@@ -412,10 +433,12 @@ impl ObsidianVaultSource {
                         duration: None,
                         outcome: None,
                     });
+                    }
                 }
                 
                 if let Some(captures) = call_regex.captures(line) {
-                    let person = captures.get(1).unwrap().as_str();
+                    if let Some(person_match) = captures.get(1) {
+                        let person = person_match.as_str();
                     activities.push(Activity {
                         id: format!("{}:call:{}", daily_note.date.format("%Y-%m-%d"), line_num),
                         title: format!("Call with {}", person),
@@ -425,6 +448,7 @@ impl ObsidianVaultSource {
                         duration: None,
                         outcome: None,
                     });
+                    }
                 }
             }
         }

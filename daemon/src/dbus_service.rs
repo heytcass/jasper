@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use zbus::ConnectionBuilder;
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -29,13 +29,15 @@ impl CompanionService {
         };
 
         // Analyze correlations on startup
-        service.refresh_insights().await?;
+        service.refresh_insights().await
+            .context("Failed to refresh insights on D-Bus service startup")?;
 
         let _connection = ConnectionBuilder::session()?
             .name("org.personal.CompanionAI")?
             .serve_at("/org/personal/CompanionAI/Companion", service)?
             .build()
-            .await?;
+            .await
+            .context("Failed to build D-Bus connection")?;
 
         info!("D-Bus service registered at org.personal.CompanionAI");
 
@@ -46,7 +48,8 @@ impl CompanionService {
 
     async fn refresh_insights(&self) -> Result<()> {
         debug!("Refreshing insights...");
-        let correlations = self.correlation_engine.analyze().await?;
+        let correlations = self.correlation_engine.analyze().await
+            .context("Failed to analyze correlations for insights")?;
         *self.current_insights.lock() = correlations;
         info!("Refreshed insights: {} correlations found", self.current_insights.lock().len());
         Ok(())
