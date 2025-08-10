@@ -59,27 +59,13 @@ impl WaybarCommand {
         Ok(json)
     }
     
-    /// Fallback to direct analysis if D-Bus is unavailable
+    /// Fallback when D-Bus is unavailable - return empty insights to avoid AI calls
     async fn fallback_direct_analysis(&self, context: &CommandContext) -> Result<()> {
-        debug!("Using direct analysis fallback for waybar");
+        debug!("D-Bus daemon unavailable - waybar will show 'daemon offline' message");
         
-        // Run correlation analysis with timeout for Waybar
-        let correlations = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            context.correlation_engine.analyze()
-        ).await {
-            Ok(Ok(correlations)) => correlations,
-            Ok(Err(e)) => {
-                // Analysis failed, return empty correlations for clean fallback
-                warn!("Correlation analysis failed for Waybar: {}", e);
-                Vec::new()
-            }
-            Err(_) => {
-                // Timeout occurred, return empty correlations
-                warn!("Correlation analysis timed out for Waybar (30s limit)");
-                Vec::new()
-            }
-        };
+        // Don't trigger AI analysis from frontend - let daemon handle this
+        // Return empty correlations so waybar shows daemon offline state
+        let correlations = Vec::new();
         
         // Get timezone from config
         let timezone = context.config.read().get_timezone();

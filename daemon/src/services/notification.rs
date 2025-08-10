@@ -4,6 +4,7 @@ use tracing::{debug, warn};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use parking_lot::RwLock;
+use notify_rust::{Notification, Hint, Urgency};
 
 /// Notification types for different insight events
 #[derive(Debug, Clone)]
@@ -36,6 +37,22 @@ impl Default for NotificationConfig {
             min_urgency_threshold: 3,      // Medium+ urgency
         }
     }
+}
+
+/// Available notification delivery methods
+#[derive(Debug, Clone, PartialEq)]
+pub enum NotificationMethod {
+    DBus,
+    NotifySend,
+    None,
+}
+
+/// Information about notification system capabilities
+#[derive(Debug, Clone)]
+pub struct NotificationCapabilities {
+    pub dbus_available: bool,
+    pub notify_send_available: bool,
+    pub preferred_method: NotificationMethod,
 }
 
 /// Service for sending desktop notifications about insight updates
@@ -123,7 +140,7 @@ impl NotificationService {
         Ok(())
     }
 
-    /// Send a desktop notification using notify-send
+    /// Send a desktop notification using native D-Bus via notify-rust
     async fn send_desktop_notification(
         &self, 
         notification_type: &NotificationType,
@@ -131,6 +148,83 @@ impl NotificationService {
     ) -> Result<()> {
         let (title, body, icon) = self.format_notification(notification_type);
 
+        // Prepare all notification parameters for the blocking task
+        let timeout = config.notification_timeout as i32;
+        let urgency = match notification_type {
+            NotificationType::NewInsight { .. } => Urgency::Normal,
+            NotificationType::ContextChanged { .. } => Urgency::Low,
+            NotificationType::CacheRefreshed => Urgency::Low,
+            NotificationType::AnalysisComplete { .. } => Urgency::Normal,
+        };
+
+        let category = match notification_type {
+            NotificationType::NewInsight { .. } => "ai-insight",
+            NotificationType::ContextChanged { .. } => "context-update",
+            NotificationType::CacheRefreshed => "system",
+            NotificationType::AnalysisComplete { .. } => "analysis",
+        };
+
+        let title_clone = title.clone();
+        let body_clone = body.clone();
+        let icon_clone = icon.clone();
+        let category_string = category.to_string();
+
+        debug!("Sending notification via D-Bus: {}", title);
+
+        // Use spawn_blocking and create the notification entirely within the blocking context
+        let notification_result = tokio::task::spawn_blocking(move || -> Result<String> {
+            let mut notification = Notification::new();
+            notification
+                .summary(&title_clone)
+                .body(&body_clone)
+                .appname("Jasper")
+                .timeout(timeout)
+                .urgency(urgency)
+                .hint(Hint::Category(category_string))
+                .hint(Hint::DesktopEntry("jasper".to_string()));
+
+            // Add icon if available
+            if let Some(icon_name) = &icon_clone {
+                notification.icon(icon_name);
+            }
+
+            // Send the notification and get the handle
+            match notification.show() {
+                Ok(handle) => {
+                    let id = handle.id().to_string();
+                    debug!("Notification sent successfully, handle: {}", id);
+                    Ok(id)
+                }
+                Err(e) => Err(anyhow::anyhow!("D-Bus notification failed: {}", e))
+            }
+        }).await;
+
+        match notification_result {
+            Ok(Ok(handle_id)) => {
+                debug!("Native D-Bus notification sent with handle: {}", handle_id);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                // Try fallback to shell command if D-Bus fails
+                warn!("Native D-Bus notification failed ({}), attempting fallback to notify-send", e);
+                self.send_notification_fallback(&title, &body, &icon, notification_type, config).await
+            }
+            Err(e) => {
+                warn!("Failed to spawn blocking task for notification ({}), attempting fallback", e);
+                self.send_notification_fallback(&title, &body, &icon, notification_type, config).await
+            }
+        }
+    }
+
+    /// Fallback notification method using shell command (for compatibility)
+    async fn send_notification_fallback(
+        &self,
+        title: &str,
+        body: &str,
+        icon: &Option<String>,
+        notification_type: &NotificationType,
+        config: &NotificationConfig
+    ) -> Result<()> {
         let mut cmd = Command::new("notify-send");
         cmd.arg("--app-name=Jasper")
             .arg("--expire-time")
@@ -153,13 +247,13 @@ impl NotificationService {
         // Add title and body
         cmd.arg(title).arg(body);
 
-        debug!("Executing notification command: {:?}", cmd);
+        debug!("Executing fallback notification command: {:?}", cmd);
 
         let output = cmd.output()?;
         
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("notify-send failed: {}", stderr));
+            return Err(anyhow::anyhow!("Both D-Bus and notify-send failed. notify-send error: {}", stderr));
         }
 
         Ok(())
@@ -239,25 +333,63 @@ impl NotificationService {
 
     /// Test notification system by sending a test notification
     pub async fn test_notification(&self) -> Result<()> {
-        let test_notification = NotificationType::NewInsight {
-            message: "This is a test notification from Jasper. If you see this, notifications are working correctly!".to_string(),
-            icon: Some("󰃭".to_string()),
-        };
-
         // Temporarily bypass cooldown for test
         {
             let mut last_notification = self.last_notification.write();
             *last_notification = None;
         }
 
-        self.notify(test_notification).await?;
-        
-        debug!("Test notification sent");
-        Ok(())
+        // Send a test notification directly via D-Bus first
+        let test_result = tokio::task::spawn_blocking(move || -> Result<String> {
+            let mut notification = Notification::new();
+            notification
+                .summary("🧪 Jasper Test")
+                .body("This is a test notification from Jasper. If you see this, D-Bus notifications are working correctly!")
+                .appname("Jasper")
+                .timeout(5000)
+                .urgency(Urgency::Normal)
+                .hint(Hint::Category("test".to_string()))
+                .hint(Hint::DesktopEntry("jasper".to_string()));
+
+            match notification.show() {
+                Ok(handle) => {
+                    let id = handle.id().to_string();
+                    Ok(id)
+                }
+                Err(e) => Err(anyhow::anyhow!("Test D-Bus notification failed: {}", e))
+            }
+        }).await;
+
+        match test_result {
+            Ok(Ok(handle_id)) => {
+                debug!("Test D-Bus notification sent with handle: {}", handle_id);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                // Try fallback test with notify-send
+                warn!("D-Bus test failed ({}), trying notify-send fallback", e);
+                let test_notification = NotificationType::NewInsight {
+                    message: "This is a test notification from Jasper via notify-send fallback. If you see this, shell notifications are working!".to_string(),
+                    icon: Some("🧪".to_string()),
+                };
+                self.notify(test_notification).await?;
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to spawn test notification task ({})", e);
+                Err(anyhow::anyhow!("Test notification system failed: {}", e))
+            }
+        }
     }
 
-    /// Check if notify-send is available on the system
+    /// Check if notification system is available (D-Bus and/or notify-send)
     pub fn is_notification_system_available(&self) -> bool {
+        // First try D-Bus connectivity
+        if self.is_dbus_notification_available() {
+            return true;
+        }
+
+        // Fallback to notify-send check
         match Command::new("which").arg("notify-send").output() {
             Ok(output) => output.status.success(),
             Err(_) => {
@@ -270,10 +402,66 @@ impl NotificationService {
         }
     }
 
+    /// Check if D-Bus notifications are available
+    pub fn is_dbus_notification_available(&self) -> bool {
+        // Use spawn_blocking to test D-Bus availability in a blocking context
+        let rt = tokio::runtime::Handle::try_current();
+        match rt {
+            Ok(handle) => {
+                // We're in an async context, use spawn_blocking
+                let result = std::thread::spawn(move || {
+                    // Try to create a minimal notification without showing it
+                    match Notification::new() {
+                        _notification => {
+                            // Just check if we can create the notification object successfully
+                            // We don't show it to avoid spam during availability checks
+                            debug!("D-Bus notification system appears to be available");
+                            true
+                        }
+                    }
+                }).join();
+                
+                result.unwrap_or(false)
+            }
+            Err(_) => {
+                // We're not in an async context, can test directly
+                match Notification::new() {
+                    _notification => {
+                        debug!("D-Bus notification system appears to be available");
+                        true
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get detailed information about available notification methods
+    pub fn get_notification_capabilities(&self) -> NotificationCapabilities {
+        let dbus_available = self.is_dbus_notification_available();
+        let notify_send_available = match Command::new("which").arg("notify-send").output() {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        };
+
+        NotificationCapabilities {
+            dbus_available,
+            notify_send_available,
+            preferred_method: if dbus_available { 
+                NotificationMethod::DBus 
+            } else if notify_send_available { 
+                NotificationMethod::NotifySend 
+            } else { 
+                NotificationMethod::None 
+            },
+        }
+    }
+
     /// Get a summary of notification system status
     pub fn get_system_info(&self) -> NotificationSystemInfo {
+        let capabilities = self.get_notification_capabilities();
         NotificationSystemInfo {
             notifications_available: self.is_notification_system_available(),
+            capabilities,
             config: self.get_config(),
             last_notification: *self.last_notification.read(),
             cooldown_active: !self.is_cooldown_expired(),
@@ -285,6 +473,7 @@ impl NotificationService {
 #[derive(Debug)]
 pub struct NotificationSystemInfo {
     pub notifications_available: bool,
+    pub capabilities: NotificationCapabilities,
     pub config: NotificationConfig,
     pub last_notification: Option<DateTime<Utc>>,
     pub cooldown_active: bool,

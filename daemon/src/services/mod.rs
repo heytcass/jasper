@@ -6,4 +6,4 @@ pub mod notification;
 pub use companion::CompanionService;
 pub use calendar::CalendarService;
 pub use insight::InsightService;
-pub use notification::{NotificationService, NotificationType, NotificationConfig};
+pub use notification::{NotificationService, NotificationType, NotificationConfig, NotificationMethod, NotificationCapabilities};

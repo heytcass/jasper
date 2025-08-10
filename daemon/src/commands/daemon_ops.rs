@@ -137,14 +137,21 @@ impl Command for TestNotificationCommand {
         
         let notification_service = context.correlation_engine.notification_service();
         
-        // Check if notification system is available
+        // Check notification system capabilities
+        let capabilities = notification_service.get_notification_capabilities();
+        
         if !notification_service.is_notification_system_available() {
-            println!("❌ Notification system not available (notify-send not found)");
-            println!("Install libnotify-bin or similar package for your distribution");
+            println!("❌ No notification system available");
+            println!("D-Bus notifications: {}", if capabilities.dbus_available { "✅ Available" } else { "❌ Unavailable" });
+            println!("notify-send command: {}", if capabilities.notify_send_available { "✅ Available" } else { "❌ Unavailable" });
+            println!("Install a notification daemon (GNOME Shell, mako, dunst) or libnotify-bin");
             return Ok(());
         }
         
         println!("✅ Notification system available");
+        println!("📡 D-Bus notifications: {}", if capabilities.dbus_available { "✅ Available" } else { "❌ Unavailable" });
+        println!("🔧 notify-send command: {}", if capabilities.notify_send_available { "✅ Available" } else { "❌ Unavailable" });
+        println!("🎯 Preferred method: {:?}", capabilities.preferred_method);
         
         // Send a test notification
         match notification_service.test_notification().await {
@@ -161,7 +168,10 @@ impl Command for TestNotificationCommand {
         let system_info = notification_service.get_system_info();
         println!("\n📊 Notification System Status:");
         println!("  • Notifications available: {}", system_info.notifications_available);
-        println!("  • Enabled: {}", system_info.config.enabled);
+        println!("  • D-Bus method available: {}", system_info.capabilities.dbus_available);
+        println!("  • Shell command available: {}", system_info.capabilities.notify_send_available);
+        println!("  • Preferred delivery method: {:?}", system_info.capabilities.preferred_method);
+        println!("  • Configuration enabled: {}", system_info.config.enabled);
         println!("  • Notify on new insights: {}", system_info.config.notify_new_insights);
         println!("  • Notify on context changes: {}", system_info.config.notify_context_changes);
         println!("  • Notify on cache refresh: {}", system_info.config.notify_cache_refresh);

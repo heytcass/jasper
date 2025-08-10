@@ -33,7 +33,7 @@ export default class JasperExtension extends Extension.Extension {
         // Add refresh button
         let refreshItem = new PopupMenu.PopupMenuItem('🔄 Refresh Now');
         refreshItem.connect('activate', () => {
-            this._refreshInsights();
+            this._manualRefresh();
             this._indicator.menu.close();
         });
         this._indicator.menu.addMenuItem(refreshItem);
@@ -67,6 +67,24 @@ export default class JasperExtension extends Extension.Extension {
     _updateMenuText() {
         if (this._item) {
             this._item.label.set_text(this._insightText);
+        }
+    }
+    
+    _manualRefresh() {
+        // First trigger AI analysis via RequestRefresh
+        try {
+            const [success, stdout, stderr] = GLib.spawn_command_line_sync(
+                '/run/current-system/sw/bin/gdbus call --session --dest org.personal.CompanionAI --object-path /org/personal/CompanionAI/Companion --method org.personal.CompanionAI.Companion1.RequestRefresh'
+            );
+            
+            // Give daemon a moment to analyze, then get fresh insights
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                this._refreshInsights();
+                return GLib.SOURCE_REMOVE;
+            });
+        } catch (error) {
+            // If RequestRefresh fails, just do regular refresh
+            this._refreshInsights();
         }
     }
     

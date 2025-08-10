@@ -147,6 +147,28 @@ pub struct NotificationConfig {
     pub notify_cache_refresh: bool,
     pub notification_timeout: u32, // milliseconds
     pub min_urgency_threshold: i32, // minimum urgency score to notify
+    /// Notification method preference (auto, dbus, notify-send)
+    #[serde(default = "default_notification_method")]
+    pub preferred_method: String,
+    /// Application name for notifications
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+    /// Custom desktop entry name for better integration
+    #[serde(default = "default_desktop_entry")]
+    pub desktop_entry: String,
+}
+
+// Default functions for notification configuration
+fn default_notification_method() -> String {
+    "auto".to_string()
+}
+
+fn default_app_name() -> String {
+    "Jasper".to_string()
+}
+
+fn default_desktop_entry() -> String {
+    "jasper".to_string()
 }
 
 impl Default for Config {
@@ -233,6 +255,9 @@ impl Default for Config {
                 notify_cache_refresh: false,   // Less noisy by default
                 notification_timeout: 5000,    // 5 seconds
                 min_urgency_threshold: 3,      // Medium+ urgency
+                preferred_method: default_notification_method(),
+                app_name: default_app_name(),
+                desktop_entry: default_desktop_entry(),
             }),
         }
     }
@@ -295,11 +320,13 @@ impl Config {
         }
         
         // Override weather API key
-        if let Some(weather_api_key) = secrets.get("openweathermap_api_key") {
+        if let Some(weather_api_key) = secrets.get("services.openweathermap") {
             debug!("Using OpenWeatherMap API key from SOPS");
             if let Some(ref mut context_sources) = self.context_sources {
                 if let Some(ref mut weather_config) = context_sources.weather {
                     weather_config.api_key = weather_api_key.clone();
+                    weather_config.enabled = true; // Enable weather when API key is available
+                    debug!("Weather context source enabled with API key from SOPS");
                 }
             }
         }

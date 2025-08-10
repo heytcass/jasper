@@ -48,10 +48,25 @@ impl CompanionService {
 
     async fn refresh_insights(&self) -> Result<()> {
         debug!("Refreshing insights...");
-        let correlations = self.correlation_engine.analyze().await
-            .context("Failed to analyze correlations for insights")?;
-        *self.current_insights.lock() = correlations;
-        info!("Refreshed insights: {} correlations found", self.current_insights.lock().len());
+        
+        // Use blocking approach to avoid zbus executor runtime issues
+        let correlation_engine = self.correlation_engine.clone();
+        let current_insights = self.current_insights.clone();
+        
+        // Use thread spawn with blocking runtime to avoid zbus context issues
+        let correlations = std::thread::spawn(move || {
+            // Create a new Tokio runtime for this thread
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                correlation_engine.analyze().await
+            })
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("Analysis thread panicked"))?
+        .context("Failed to analyze correlations for insights")?;
+        
+        *current_insights.lock() = correlations;
+        info!("Refreshed insights: {} correlations found", current_insights.lock().len());
         Ok(())
     }
 }

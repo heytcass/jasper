@@ -32,3 +32,6 @@ regex = { workspace = true }
 md5 = { workspace = true }
 urlencoding = "2.1"
 async-trait = { workspace = true }
+
+# Desktop notifications - using dbus backend for compatibility
+notify-rust = { version = "4.11", default-features = false, features = ["dbus"] }
