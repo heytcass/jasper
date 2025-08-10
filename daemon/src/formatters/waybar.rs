@@ -93,7 +93,8 @@ impl WaybarFrontendFormatter {
     
     fn is_valid_glyph(&self, glyph: &str) -> bool {
         // Validate glyph is proper Unicode and not empty
-        !glyph.is_empty() && glyph.chars().count() == 1
+        // Allow multi-character emojis (e.g., 🌧️ which is rain + variation selector)
+        !glyph.is_empty() && glyph.chars().count() <= 3
     }
 
     fn create_tooltip(&self, insight: &InsightData, timezone: Tz) -> String {
