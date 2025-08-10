@@ -22,6 +22,14 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 - **Configurable Privacy**: Control what information is analyzed
 - **Local Processing**: Calendar data processed locally before AI analysis
 
+### 🔔 Smart Desktop Notifications
+- **Native D-Bus Integration**: Direct desktop notification system communication
+- **Frontend-Agnostic**: Works seamlessly with GNOME 48, mako, dunst, and any freedesktop.org-compliant notification daemon
+- **Rich Notifications**: Categories, urgency levels, and desktop integration hints
+- **Auto-Detection**: Automatically selects best notification method (D-Bus or fallback)
+- **Intelligent Delivery**: New AI insights trigger instant notifications
+- **Configurable**: Fine-tune notification preferences and timing
+
 ### 🎨 Desktop Integration
 
 #### GNOME Shell Extension (Primary)
@@ -29,6 +37,7 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 - **Popup Menu**: Click to view full AI insights and manually refresh
 - **Auto-Updates**: Refreshes insights automatically every 5 seconds
 - **System Theming**: Follows GNOME Shell visual design
+- **Notification Integration**: Seamless notification grouping in GNOME 48+
 
 #### Waybar Module (Alternative)
 - **Status Bar Display**: Clean, themed status bar integration
@@ -40,6 +49,7 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 ### 🔧 Extensible Architecture
 - **Modular Context Sources**: Obsidian notes, weather, tasks (planned)
 - **D-Bus Interface**: Standard Linux IPC for frontend communication
+- **Native Notifications**: Direct integration with desktop notification systems
 - **Command Pattern**: Clean CLI interface with multiple operations
 - **Service Layer**: Organized business logic for easy extension
 - **Error Recovery**: Circuit breaker patterns and retry mechanisms
@@ -52,8 +62,9 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 │                 │◄───┤                  │◄───┤                 │
 │ • GNOME Shell   │    │ • AI Analysis    │    │ • Google Cal    │
 │ • Waybar        │    │ • D-Bus Service  │    │ • Obsidian      │
-│ • CLI Tools     │    │ • Context Mgmt   │    │ • Weather       │
-│ • Future UIs    │    │ • Data Sanitize  │    │ • Tasks         │
+│ • Notifications │    │ • Context Mgmt   │    │ • Weather       │
+│ • CLI Tools     │    │ • Data Sanitize  │    │ • Tasks         │
+│ • Future UIs    │    │ • Notify Engine  │    │ • Context APIs  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
          │                        │                        │
          ▼                        ▼                        ▼
@@ -61,7 +72,8 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 │   User Actions  │    │  Claude Sonnet 4 │    │ Configuration   │
 │ • Click for menu│    │ • Pattern Analysis│   │ • TOML Config   │
 │ • Manual refresh│    │ • Insights Gen   │    │ • SOPS Secrets  │
-│ • Notifications │    │ • Context Aware  │    │ • OAuth Tokens  │
+│ • Auto notify   │    │ • Context Aware  │    │ • OAuth Tokens  │
+│ • Smart alerts  │    │ • Real-time Proc │    │ • Notify Prefs  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
@@ -201,6 +213,14 @@ enable_travel_prep = true      # Travel preparation alerts
 enable_overcommitment_warnings = true
 high_urgency_days = 2          # Days ahead for high urgency
 max_insights_per_day = 10
+
+[notifications]
+enabled = true                 # Enable desktop notifications
+notify_new_insights = true     # Notify when AI generates new insights
+notify_context_changes = false # Notify on context updates (less noisy)
+notification_timeout = 5000    # Notification timeout in milliseconds
+preferred_method = "auto"      # auto, dbus, notify-send
+app_name = "Jasper"           # Application name for notifications
 
 [privacy]
 sanitize_pii = true           # Remove personal info before AI
