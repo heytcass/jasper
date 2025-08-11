@@ -28,8 +28,13 @@ pub struct NotificationConfig {
 
 impl Default for NotificationConfig {
     fn default() -> Self {
+        // Check if daemon notifications should be disabled (e.g., when GNOME extension handles them)
+        let daemon_notifications_disabled = std::env::var("JASPER_DISABLE_DAEMON_NOTIFICATIONS")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+            
         Self {
-            enabled: true,
+            enabled: !daemon_notifications_disabled,
             notify_new_insights: true,
             notify_context_changes: false, // Less noisy by default
             notify_cache_refresh: false,   // Less noisy by default

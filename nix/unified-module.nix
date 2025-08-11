@@ -149,6 +149,10 @@ in
         JASPER_ACTIVE_FRONTENDS = concatStringsSep "," activeFrontends;
         JASPER_UNIFIED_PACKAGE = "1";
         
+        # Disable daemon notifications when GNOME extension is enabled
+        # Extension will handle notifications instead
+        JASPER_DISABLE_DAEMON_NOTIFICATIONS = toString shouldEnableGnomeExtension;
+        
         # Desktop environment variables
         XDG_RUNTIME_DIR = "/run/user/%i";
       } // cfg.extraConfig;
@@ -172,7 +176,7 @@ in
           "org/gnome/shell/extensions/jasper" = {
             auto-refresh-enabled = true;
             refresh-interval = lib.gvariant.mkInt32 30;
-            show-notifications = false;
+            show-notifications = true;
           };
         };
       }];
