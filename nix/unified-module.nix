@@ -171,8 +171,8 @@ in
           # Extension-specific settings can be added here
           "org/gnome/shell/extensions/jasper" = {
             auto-refresh-enabled = true;
-            refresh-interval = 30;
-            show-notifications = true;
+            refresh-interval = lib.gvariant.mkInt32 30;
+            show-notifications = false;
           };
         };
       }];
