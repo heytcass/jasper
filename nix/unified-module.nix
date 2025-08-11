@@ -162,17 +162,17 @@ in
       profiles.user.databases = [{
         settings = {
           "org/gnome/shell" = {
-            enabled-extensions = mkDefault [ extensionUuid ];
+            enabled-extensions = [ extensionUuid ];
             
             # Auto-enable on first run
-            "disable-user-extensions" = mkDefault false;
+            disable-user-extensions = false;
           };
           
           # Extension-specific settings can be added here
-          "org/gnome/shell/extensions/jasper" = mkDefault {
-            "auto-refresh-enabled" = true;
-            "refresh-interval" = 30;
-            "show-notifications" = true;
+          "org/gnome/shell/extensions/jasper" = {
+            auto-refresh-enabled = true;
+            refresh-interval = 30;
+            show-notifications = true;
           };
         };
       }];
