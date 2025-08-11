@@ -23,6 +23,7 @@ mod error_recovery;
 mod frontend_framework;
 mod formatters;
 mod frontend_manager;
+mod desktop_detection;
 
 use config::Config;
 use database::DatabaseInner;
@@ -33,6 +34,7 @@ use commands::{
     daemon_ops::{StartCommand, StatusCommand, StopCommand, ClearCacheCommand, TestNotificationCommand},
     waybar::WaybarCommand,
 };
+use desktop_detection::DesktopDetector;
 
 #[derive(Parser)]
 #[command(name = "jasper-companion-daemon")]
@@ -83,6 +85,8 @@ enum Commands {
     ClearCache,
     /// Test the notification system
     TestNotification,
+    /// Detect desktop environment and components
+    DetectDesktop,
 }
 
 #[tokio::main]
@@ -138,11 +142,62 @@ async fn main() -> Result<()> {
         Commands::AddTestEvents => Box::new(AddTestEventsCommand),
         Commands::ClearCache => Box::new(ClearCacheCommand),
         Commands::TestNotification => Box::new(TestNotificationCommand),
+        Commands::DetectDesktop => Box::new(DetectDesktopCommand),
     };
 
     command.execute(&context).await
         .context("Failed to execute command")?;
 
     Ok(())
+}
+
+// Simple inline command for desktop detection testing
+struct DetectDesktopCommand;
+
+#[async_trait::async_trait]
+impl Command for DetectDesktopCommand {
+    async fn execute(&mut self, _context: &CommandContext) -> Result<()> {
+        let mut detector = DesktopDetector::new();
+        
+        match detector.detect() {
+            Ok(context) => {
+                println!("Desktop Environment Detection Results:");
+                println!("=====================================");
+                println!("Primary Desktop: {}", context.primary_de.name());
+                println!("Session Type: {}", context.session_type.name());
+                println!("Supports Extensions: {}", context.primary_de.supports_extensions());
+                println!("Typical Status Bar: {:?}", context.primary_de.typical_status_bar());
+                println!();
+                println!("Available Components:");
+                println!("- Waybar: {}", context.available_components.waybar);
+                println!("- GNOME Shell: {}", context.available_components.gnome_shell);
+                println!("- KDE Plasma: {}", context.available_components.kde_plasma);
+                println!("- Mako: {}", context.available_components.mako);
+                println!("- Dunst: {}", context.available_components.dunst);
+                println!();
+                println!("Available Status Bars: {:?}", context.available_components.available_status_bars());
+                println!("Available Notification Services: {:?}", context.available_components.available_notification_services());
+                println!();
+                println!("Recommended Notification Service: {}", context.notification_service.name());
+                println!();
+                println!("Summary: {}", context.summary());
+                
+                // Test refresh functionality
+                println!();
+                println!("Testing refresh functionality...");
+                if let Ok(refreshed_context) = detector.refresh() {
+                    println!("Refresh successful: {}", refreshed_context.summary());
+                } else {
+                    println!("Refresh failed");
+                }
+            }
+            Err(e) => {
+                eprintln!("Desktop detection failed: {}", e);
+                return Err(e);
+            }
+        }
+        
+        Ok(())
+    }
 }
 

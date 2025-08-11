@@ -9,8 +9,13 @@
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
     {
-      # NixOS module for system integration (must be outside eachDefaultSystem)
-      nixosModules.default = import ./nix/module.nix;
+      # NixOS modules for system integration (must be outside eachDefaultSystem)
+      nixosModules = {
+        # Legacy module (kept for backward compatibility)
+        default = import ./nix/module.nix;
+        # New unified module with auto-detection
+        unified = import ./nix/unified-module.nix;
+      };
     } // flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
@@ -79,8 +84,9 @@
           DATABASE_URL = "sqlite:./dev.db";
         };
         
-        packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "jasper-companion";
+        # Core daemon package
+        packages.daemon = pkgs.rustPlatform.buildRustPackage {
+          pname = "jasper-companion-daemon";
           version = "0.2.0";
           
           src = ./.;
@@ -89,10 +95,17 @@
             lockFile = ./Cargo.lock;
           };
           
-          buildInputs = [ pkgs.dbus pkgs.sqlite pkgs.openssl ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = with pkgs; [ dbus sqlite openssl ];
+          nativeBuildInputs = with pkgs; [ pkg-config ];
+          
+          meta = with pkgs.lib; {
+            description = "Jasper Companion AI daemon with desktop environment detection";
+            license = licenses.mit;
+            platforms = platforms.linux;
+          };
         };
         
+        # GNOME extension component
         packages.gnome-extension = pkgs.stdenv.mkDerivation {
           pname = "jasper-companion-gnome-extension";
           version = "0.2.0";
@@ -105,8 +118,15 @@
           '';
           
           passthru.extensionUuid = "jasper@tom.local";
+          
+          meta = with pkgs.lib; {
+            description = "GNOME Shell extension for Jasper Companion";
+            license = licenses.mit;
+            platforms = platforms.linux;
+          };
         };
         
+        # Development GNOME extension (kept for development workflow)
         packages.gnome-extension-dev = pkgs.stdenv.mkDerivation {
           pname = "jasper-companion-gnome-extension-dev";
           version = "0.2.0-dev-${self.shortRev or "dirty"}";
@@ -123,6 +143,13 @@
           '';
           
           passthru.extensionUuid = "jasper-dev-v3@tom.local";
+        };
+        
+        # Unified package with desktop environment detection and auto-integration
+        packages.default = pkgs.callPackage ./nix/unified-package.nix {
+          inherit system;
+          jasperDaemon = self.packages.${system}.daemon;
+          jasperGnomeExtension = self.packages.${system}.gnome-extension;
         };
       });
 }
