@@ -260,6 +260,5 @@ in
   
   meta = {
     maintainers = with lib.maintainers; [ ];
-    doc = ./unified-module.md;
   };
 }
