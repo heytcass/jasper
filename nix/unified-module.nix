@@ -178,22 +178,13 @@ in
       }];
     };
     
-    # Waybar integration helpers (if Waybar is configured)
-    programs.waybar = mkIf (hasWaybar && builtins.elem "waybar" activeFrontends) {
-      settings = {
-        jasper = {
-          # Provide Jasper module configuration
-          "custom/jasper" = {
-            exec = "${cfg.package}/bin/jasper-companion waybar";
-            return-type = "json";
-            interval = 30;
-            restart-interval = 1;
-            tooltip = true;
-            on-click = "${cfg.package}/bin/jasper-companion status";
-          };
-        };
-      };
-    };
+    # Note: Waybar integration is provided via the daemon's waybar command
+    # Users should configure their waybar manually with:
+    # "custom/jasper": {
+    #   "exec": "jasper-companion waybar",
+    #   "return-type": "json", 
+    #   "interval": 30
+    # }
     
     # System-level desktop integration
     xdg.portal = mkIf cfg.autoDetectDesktop {
