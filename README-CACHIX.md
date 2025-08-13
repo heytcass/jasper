@@ -6,7 +6,7 @@ Add the Jasper Companion binary cache to your system:
 
 ```bash
 # Add the cache (do this once)
-cachix use jasper-companion
+cachix use jasper
 ```
 
 Or manually add to your `configuration.nix`:
@@ -16,11 +16,11 @@ Or manually add to your `configuration.nix`:
   nix = {
     settings = {
       substituters = [
-        "https://jasper-companion.cachix.org"
+        "https://jasper.cachix.org"
         "https://cache.nixos.org/"
       ];
       trusted-public-keys = [
-        "jasper-companion.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
+        "jasper.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
         "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       ];
     };
@@ -38,7 +38,7 @@ nix-env -iA cachix -f https://cachix.org/api/v1/install
 
 # Create your cache (do this once)
 cachix authtoken YOUR_AUTH_TOKEN
-cachix create jasper-companion
+cachix create jasper
 ```
 
 ### 2. Add GitHub Secret
@@ -49,7 +49,7 @@ Add `CACHIX_AUTH_TOKEN` to your GitHub repository secrets with your cachix auth 
 
 ```bash
 # Use the cache locally
-cachix use jasper-companion
+cachix use jasper
 
 # Your builds will now use cached binaries when available
 nix build .#daemon
