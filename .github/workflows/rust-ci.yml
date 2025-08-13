@@ -16,8 +16,9 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       
-      # Use cachix for faster builds
+      # Use cachix for faster builds (optional)
       - uses: cachix/cachix-action@v15
+        if: ${{ secrets.CACHIX_AUTH_TOKEN }}
         with:
           name: jasper-companion
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
