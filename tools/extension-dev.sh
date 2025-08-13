@@ -180,6 +180,20 @@ enable_and_verify() {
 test_dbus_communication() {
     log_info "Testing D-Bus communication..."
     
+    # Find gdbus command with fallback options
+    local gdbus_cmd
+    if command -v gdbus >/dev/null 2>&1; then
+        gdbus_cmd="gdbus"
+    elif command -v /run/current-system/sw/bin/gdbus >/dev/null 2>&1; then
+        gdbus_cmd="/run/current-system/sw/bin/gdbus"
+    elif command -v /usr/bin/gdbus >/dev/null 2>&1; then
+        gdbus_cmd="/usr/bin/gdbus"
+    else
+        log_warning "gdbus command not found in PATH or common locations"
+        log_warning "D-Bus communication test skipped"
+        return 1
+    fi
+    
     # Check if daemon is running
     if ! systemctl --user is-active jasper-companion-daemon >/dev/null 2>&1; then
         log_warning "Jasper daemon is not running. Starting it..."
@@ -187,9 +201,9 @@ test_dbus_communication() {
         sleep 2
     fi
     
-    # Test D-Bus call
+    # Test D-Bus call using discovered command
     local dbus_result
-    if dbus_result=$(timeout 10 gdbus call --session --dest org.personal.CompanionAI \
+    if dbus_result=$(timeout 10 "$gdbus_cmd" call --session --dest org.personal.CompanionAI \
         --object-path /org/personal/CompanionAI/Companion \
         --method org.personal.CompanionAI.Companion1.GetFormattedInsights "gnome" 2>/dev/null); then
         log_success "D-Bus communication working: ${dbus_result:0:100}..."

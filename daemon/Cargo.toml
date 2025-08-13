@@ -35,3 +35,7 @@ async-trait = { workspace = true }
 
 # Desktop notifications - using dbus backend for compatibility
 notify-rust = { version = "4.11", default-features = false, features = ["dbus"] }
+
+[dev-dependencies]
+# Integration testing dependencies
+tempfile = "3.8"

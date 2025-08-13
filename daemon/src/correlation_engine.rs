@@ -98,6 +98,9 @@ impl CorrelationEngine {
                 notify_cache_refresh: cfg.notify_cache_refresh,
                 notification_timeout: cfg.notification_timeout,
                 min_urgency_threshold: cfg.min_urgency_threshold,
+                preferred_method: cfg.preferred_method.clone(),
+                app_name: cfg.app_name.clone(),
+                desktop_entry: cfg.desktop_entry.clone(),
             })
             .unwrap_or_else(|| NotificationConfig::default());
         let notification_service = Arc::new(NotificationService::new(notification_config));

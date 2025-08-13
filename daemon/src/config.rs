@@ -460,21 +460,138 @@ impl Config {
         Ok(())
     }
     
-    fn validate_basic_config(&self) -> Result<()> {
-        // Validate timezone with detailed error messages
-        match self.general.timezone.parse::<chrono_tz::Tz>() {
-            Ok(_) => {},
+    /// Validate email address format
+    fn validate_email(&self, email: &str, field_name: &str) -> Result<()> {
+        if email.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+        
+        // Basic email validation without external dependencies
+        let email_parts: Vec<&str> = email.split('@').collect();
+        if email_parts.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: must contain exactly one @ symbol", 
+                field_name, email
+            ));
+        }
+        
+        let local = email_parts[0];
+        let domain = email_parts[1];
+        
+        // Validate local part
+        if local.is_empty() || local.len() > 64 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: local part must be 1-64 characters", 
+                field_name, email
+            ));
+        }
+        
+        // Validate domain part
+        if domain.is_empty() || domain.len() > 255 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: domain part must be 1-255 characters", 
+                field_name, email
+            ));
+        }
+        
+        // Basic domain format check
+        if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: domain must contain at least one dot and not start/end with dot", 
+                field_name, email
+            ));
+        }
+        
+        // Check for invalid characters (basic check)
+        if email.contains(' ') || email.contains('\t') || email.contains('\n') {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: cannot contain whitespace", 
+                field_name, email
+            ));
+        }
+        
+        Ok(())
+    }
+    
+    /// Validate URL format
+    fn validate_url(&self, url: &str, field_name: &str) -> Result<()> {
+        if url.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+        
+        // Basic URL validation without external dependencies
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: must start with http:// or https://", 
+                field_name, url
+            ));
+        }
+        
+        // Check for basic URL structure
+        let url_without_scheme = if url.starts_with("https://") {
+            &url[8..]
+        } else {
+            &url[7..]
+        };
+        
+        if url_without_scheme.is_empty() {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: missing domain after scheme", 
+                field_name, url
+            ));
+        }
+        
+        // Basic domain validation (before first slash or end of string)
+        let domain_part = url_without_scheme.split('/').next().unwrap_or("");
+        if domain_part.is_empty() {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: missing domain", 
+                field_name, url
+            ));
+        }
+        
+        // Check for invalid characters
+        if url.contains(' ') || url.contains('\t') || url.contains('\n') {
+            return Err(anyhow::anyhow!(
+                "{} '{}' is invalid: cannot contain whitespace", 
+                field_name, url
+            ));
+        }
+        
+        // Check for localhost/IP addresses for security warnings
+        if url.starts_with("http://") && !domain_part.starts_with("localhost") && 
+           !domain_part.starts_with("127.0.0.1") && !domain_part.starts_with("::1") {
+            warn!("{} uses HTTP (not HTTPS) with non-localhost domain: {}", field_name, url);
+        }
+        
+        Ok(())
+    }
+    
+    /// Validate timezone string
+    fn validate_timezone(&self, timezone: &str, field_name: &str) -> Result<()> {
+        if timezone.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+        
+        // Use chrono_tz for validation
+        match timezone.parse::<chrono_tz::Tz>() {
+            Ok(_) => Ok(()),
             Err(_) => {
                 let suggestions = vec![
-                    "UTC", "America/New_York", "Europe/London", "Asia/Tokyo"
+                    "UTC", "America/New_York", "Europe/London", "Asia/Tokyo", 
+                    "America/Detroit", "Europe/Paris", "Asia/Shanghai"
                 ];
-                return Err(anyhow::anyhow!(
-                    "Invalid timezone '{}'. Examples: {}", 
-                    self.general.timezone,
-                    suggestions.join(", ")
-                ));
+                Err(anyhow::anyhow!(
+                    "{} '{}' is invalid timezone. Common examples: {}", 
+                    field_name, timezone, suggestions.join(", ")
+                ))
             }
         }
+    }
+    
+    fn validate_basic_config(&self) -> Result<()> {
+        // Validate timezone using helper function
+        self.validate_timezone(&self.general.timezone, "general.timezone")?;
         
         // Validate planning horizon with reasonable bounds
         if self.general.planning_horizon_days == 0 {
@@ -588,15 +705,13 @@ impl Config {
             warn!("client_secret appears to be too short for a valid OAuth secret");
         }
         
-        // Validate redirect URI with URL parsing
+        // Validate redirect URI
         if redirect_uri.is_empty() {
             return Err(anyhow::anyhow!("OAuth redirect_uri cannot be empty"));
         }
         
-        // Basic URL validation without external dependencies
-        if !redirect_uri.starts_with("http://") && !redirect_uri.starts_with("https://") {
-            return Err(anyhow::anyhow!("redirect_uri must be a valid HTTP(S) URL: {}", redirect_uri));
-        }
+        // Use comprehensive URL validation
+        self.validate_url(redirect_uri, "redirect_uri")?;
         
         // Security checks for redirect URI
         if redirect_uri.starts_with("http://") {

@@ -3,7 +3,8 @@ use std::process::Command;
 use tracing::{debug, warn};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use parking_lot::RwLock;
+use parking_lot::{RwLock, Mutex};
+use std::collections::HashMap;
 use notify_rust::{Notification, Hint, Urgency};
 
 /// Notification types for different insight events
@@ -24,6 +25,12 @@ pub struct NotificationConfig {
     pub notify_cache_refresh: bool,
     pub notification_timeout: u32, // milliseconds
     pub min_urgency_threshold: i32, // minimum urgency score to notify
+    /// Notification method preference (auto, dbus, notify-send)
+    pub preferred_method: String,
+    /// Application name for notifications  
+    pub app_name: String,
+    /// Custom desktop entry name for better integration
+    pub desktop_entry: String,
 }
 
 impl Default for NotificationConfig {
@@ -40,6 +47,9 @@ impl Default for NotificationConfig {
             notify_cache_refresh: false,   // Less noisy by default
             notification_timeout: 5000,    // 5 seconds
             min_urgency_threshold: 3,      // Medium+ urgency
+            preferred_method: "auto".to_string(),
+            app_name: "Jasper".to_string(),
+            desktop_entry: "jasper".to_string(),
         }
     }
 }
@@ -65,6 +75,8 @@ pub struct NotificationService {
     config: Arc<RwLock<NotificationConfig>>,
     last_notification: Arc<RwLock<Option<DateTime<Utc>>>>,
     notification_cooldown: chrono::Duration,
+    // Atomic deduplication cache to prevent race conditions
+    notification_cache: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
 }
 
 impl NotificationService {
@@ -73,37 +85,35 @@ impl NotificationService {
             config: Arc::new(RwLock::new(config)),
             last_notification: Arc::new(RwLock::new(None)),
             notification_cooldown: chrono::Duration::minutes(2), // Prevent spam
+            notification_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Send a notification if configured and not on cooldown
     pub async fn notify(&self, notification_type: NotificationType) -> Result<()> {
-        use std::fs;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        
-        // Create a simple file-based lock to prevent multiple notifications from multiple waybar instances
-        let lock_dir = "/tmp/jasper-notifications";
-        let _ = fs::create_dir_all(&lock_dir);
-        
-        // Create a lock file based on notification content hash for deduplication
+        // Use atomic mutex-based deduplication to prevent race conditions
         let notification_hash = format!("{:x}", md5::compute(format!("{:?}", notification_type).as_bytes()));
-        let lock_file = format!("{}/notify-{}", lock_dir, notification_hash);
+        let now = Utc::now();
         
-        // Check if notification was sent recently (within 5 seconds)
-        if let Ok(metadata) = fs::metadata(&lock_file) {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration_since_epoch) = modified.duration_since(UNIX_EPOCH) {
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                    if now.as_secs() - duration_since_epoch.as_secs() < 5 {
-                        debug!("Notification recently sent by another process, skipping");
-                        return Ok(());
-                    }
+        // Check deduplication cache with atomic operations
+        {
+            let mut cache = self.notification_cache.lock();
+            
+            // Clean up old entries (older than 5 seconds)
+            let cutoff = now - chrono::Duration::seconds(5);
+            cache.retain(|_, &mut timestamp| timestamp > cutoff);
+            
+            // Check if this notification was recently sent
+            if let Some(&last_sent) = cache.get(&notification_hash) {
+                if now.signed_duration_since(last_sent) < chrono::Duration::seconds(5) {
+                    debug!("Notification recently sent, skipping duplicate: {}", notification_hash);
+                    return Ok(());
                 }
             }
+            
+            // Record this notification attempt
+            cache.insert(notification_hash.clone(), now);
         }
-        
-        // Create/update lock file
-        let _ = fs::write(&lock_file, "locked");
         
         let config = self.config.read().clone();
         
@@ -145,38 +155,96 @@ impl NotificationService {
         Ok(())
     }
 
-    /// Send a desktop notification using native D-Bus via notify-rust
+    /// Send a desktop notification using the best available method
     async fn send_desktop_notification(
         &self, 
         notification_type: &NotificationType,
         config: &NotificationConfig
     ) -> Result<()> {
         let (title, body, icon) = self.format_notification(notification_type);
+        
+        // Determine the best notification method once
+        let method = self.determine_notification_method(config);
+        debug!("Using notification method: {:?} for: {}", method, title);
+        
+        match method {
+            NotificationMethod::DBus => {
+                self.send_dbus_notification(&title, &body, &icon, notification_type, config).await
+            }
+            NotificationMethod::NotifySend => {
+                self.send_notify_send_notification(&title, &body, &icon, notification_type, config).await
+            }
+            NotificationMethod::None => {
+                debug!("No notification method available, skipping: {}", title);
+                Ok(())
+            }
+        }
+    }
+    
+    /// Determine the best notification method based on configuration and availability
+    fn determine_notification_method(&self, config: &NotificationConfig) -> NotificationMethod {
+        match config.preferred_method.as_str() {
+            "dbus" => {
+                if self.is_dbus_notification_available() {
+                    NotificationMethod::DBus
+                } else {
+                    warn!("D-Bus notifications requested but not available, falling back");
+                    self.get_fallback_method()
+                }
+            }
+            "notify-send" => {
+                if self.is_notify_send_available() {
+                    NotificationMethod::NotifySend
+                } else {
+                    warn!("notify-send requested but not available, falling back");
+                    self.get_fallback_method()
+                }
+            }
+            "auto" | _ => self.get_best_available_method(),
+        }
+    }
+    
+    /// Get the best available notification method
+    fn get_best_available_method(&self) -> NotificationMethod {
+        if self.is_dbus_notification_available() {
+            NotificationMethod::DBus
+        } else if self.is_notify_send_available() {
+            NotificationMethod::NotifySend
+        } else {
+            NotificationMethod::None
+        }
+    }
+    
+    /// Get fallback method when preferred method is unavailable
+    fn get_fallback_method(&self) -> NotificationMethod {
+        if self.is_notify_send_available() {
+            NotificationMethod::NotifySend
+        } else if self.is_dbus_notification_available() {
+            NotificationMethod::DBus
+        } else {
+            NotificationMethod::None
+        }
+    }
 
-        // Prepare all notification parameters for the blocking task
+    /// Send notification via D-Bus (native method)
+    async fn send_dbus_notification(
+        &self,
+        title: &str,
+        body: &str,
+        icon: &Option<String>,
+        notification_type: &NotificationType,
+        config: &NotificationConfig
+    ) -> Result<()> {
         let timeout = config.notification_timeout as i32;
-        let urgency = match notification_type {
-            NotificationType::NewInsight { .. } => Urgency::Normal,
-            NotificationType::ContextChanged { .. } => Urgency::Low,
-            NotificationType::CacheRefreshed => Urgency::Low,
-            NotificationType::AnalysisComplete { .. } => Urgency::Normal,
-        };
+        let urgency = self.get_urgency_for_type(notification_type);
+        let category = self.get_category_for_type(notification_type);
 
-        let category = match notification_type {
-            NotificationType::NewInsight { .. } => "ai-insight",
-            NotificationType::ContextChanged { .. } => "context-update",
-            NotificationType::CacheRefreshed => "system",
-            NotificationType::AnalysisComplete { .. } => "analysis",
-        };
-
-        let title_clone = title.clone();
-        let body_clone = body.clone();
+        let title_clone = title.to_string();
+        let body_clone = body.to_string();
         let icon_clone = icon.clone();
         let category_string = category.to_string();
 
-        debug!("Sending notification via D-Bus: {}", title);
-
-        // Use spawn_blocking and create the notification entirely within the blocking context
+        // Use spawn_blocking for D-Bus operations
         let notification_result = tokio::task::spawn_blocking(move || -> Result<String> {
             let mut notification = Notification::new();
             notification
@@ -188,16 +256,14 @@ impl NotificationService {
                 .hint(Hint::Category(category_string))
                 .hint(Hint::DesktopEntry("jasper".to_string()));
 
-            // Add icon if available
             if let Some(icon_name) = &icon_clone {
                 notification.icon(icon_name);
             }
 
-            // Send the notification and get the handle
             match notification.show() {
                 Ok(handle) => {
                     let id = handle.id().to_string();
-                    debug!("Notification sent successfully, handle: {}", id);
+                    debug!("D-Bus notification sent, handle: {}", id);
                     Ok(id)
                 }
                 Err(e) => Err(anyhow::anyhow!("D-Bus notification failed: {}", e))
@@ -206,23 +272,22 @@ impl NotificationService {
 
         match notification_result {
             Ok(Ok(handle_id)) => {
-                debug!("Native D-Bus notification sent with handle: {}", handle_id);
+                debug!("D-Bus notification successful: {}", handle_id);
                 Ok(())
             }
             Ok(Err(e)) => {
-                // Try fallback to shell command if D-Bus fails
-                warn!("Native D-Bus notification failed ({}), attempting fallback to notify-send", e);
-                self.send_notification_fallback(&title, &body, &icon, notification_type, config).await
+                warn!("D-Bus notification failed: {}", e);
+                Err(e)
             }
             Err(e) => {
-                warn!("Failed to spawn blocking task for notification ({}), attempting fallback", e);
-                self.send_notification_fallback(&title, &body, &icon, notification_type, config).await
+                warn!("D-Bus notification task failed: {}", e);
+                Err(anyhow::anyhow!("D-Bus notification task error: {}", e))
             }
         }
     }
 
-    /// Fallback notification method using shell command (for compatibility)
-    async fn send_notification_fallback(
+    /// Send notification via notify-send command
+    async fn send_notify_send_notification(
         &self,
         title: &str,
         body: &str,
@@ -241,11 +306,10 @@ impl NotificationService {
         }
 
         // Add urgency level based on notification type
-        let urgency = match notification_type {
-            NotificationType::NewInsight { .. } => "normal",
-            NotificationType::ContextChanged { .. } => "low",
-            NotificationType::CacheRefreshed => "low",
-            NotificationType::AnalysisComplete { .. } => "normal",
+        let urgency = match self.get_urgency_for_type(notification_type) {
+            Urgency::Low => "low",
+            Urgency::Normal => "normal",
+            Urgency::Critical => "critical",
         };
         cmd.arg("--urgency").arg(urgency);
 
@@ -258,10 +322,44 @@ impl NotificationService {
         
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Both D-Bus and notify-send failed. notify-send error: {}", stderr));
+            return Err(anyhow::anyhow!("notify-send command failed: {}", stderr));
         }
 
         Ok(())
+    }
+    
+    /// Get urgency level for notification type
+    fn get_urgency_for_type(&self, notification_type: &NotificationType) -> Urgency {
+        match notification_type {
+            NotificationType::NewInsight { .. } => Urgency::Normal,
+            NotificationType::ContextChanged { .. } => Urgency::Low,
+            NotificationType::CacheRefreshed => Urgency::Low,
+            NotificationType::AnalysisComplete { .. } => Urgency::Normal,
+        }
+    }
+    
+    /// Get category for notification type
+    fn get_category_for_type(&self, notification_type: &NotificationType) -> &'static str {
+        match notification_type {
+            NotificationType::NewInsight { .. } => "ai-insight",
+            NotificationType::ContextChanged { .. } => "context-update", 
+            NotificationType::CacheRefreshed => "system",
+            NotificationType::AnalysisComplete { .. } => "analysis",
+        }
+    }
+    
+    /// Check if notify-send is available
+    fn is_notify_send_available(&self) -> bool {
+        match Command::new("which").arg("notify-send").output() {
+            Ok(output) => output.status.success(),
+            Err(_) => {
+                // Try direct execution as fallback
+                match Command::new("notify-send").arg("--version").output() {
+                    Ok(output) => output.status.success(),
+                    Err(_) => false,
+                }
+            }
+        }
     }
 
     /// Format notification content based on type
@@ -344,47 +442,18 @@ impl NotificationService {
             *last_notification = None;
         }
 
-        // Send a test notification directly via D-Bus first
-        let test_result = tokio::task::spawn_blocking(move || -> Result<String> {
-            let mut notification = Notification::new();
-            notification
-                .summary("🧪 Jasper Test")
-                .body("This is a test notification from Jasper. If you see this, D-Bus notifications are working correctly!")
-                .appname("Jasper")
-                .timeout(5000)
-                .urgency(Urgency::Normal)
-                .hint(Hint::Category("test".to_string()))
-                .hint(Hint::DesktopEntry("jasper".to_string()));
+        // Create a test notification and send via the normal routing
+        let test_notification = NotificationType::NewInsight {
+            message: "🧪 Test notification from Jasper! If you see this, notifications are working correctly.".to_string(),
+            icon: Some("dialog-information".to_string()),
+        };
 
-            match notification.show() {
-                Ok(handle) => {
-                    let id = handle.id().to_string();
-                    Ok(id)
-                }
-                Err(e) => Err(anyhow::anyhow!("Test D-Bus notification failed: {}", e))
-            }
-        }).await;
-
-        match test_result {
-            Ok(Ok(handle_id)) => {
-                debug!("Test D-Bus notification sent with handle: {}", handle_id);
-                Ok(())
-            }
-            Ok(Err(e)) => {
-                // Try fallback test with notify-send
-                warn!("D-Bus test failed ({}), trying notify-send fallback", e);
-                let test_notification = NotificationType::NewInsight {
-                    message: "This is a test notification from Jasper via notify-send fallback. If you see this, shell notifications are working!".to_string(),
-                    icon: Some("🧪".to_string()),
-                };
-                self.notify(test_notification).await?;
-                Ok(())
-            }
-            Err(e) => {
-                warn!("Failed to spawn test notification task ({})", e);
-                Err(anyhow::anyhow!("Test notification system failed: {}", e))
-            }
-        }
+        // Send via the normal notification routing system
+        debug!("Sending test notification via standard routing");
+        self.notify(test_notification).await?;
+        
+        debug!("Test notification completed successfully");
+        Ok(())
     }
 
     /// Check if notification system is available (D-Bus and/or notify-send)
@@ -472,6 +541,32 @@ impl NotificationService {
             cooldown_active: !self.is_cooldown_expired(),
         }
     }
+    
+    /// Get detailed diagnostic information for debugging
+    pub fn get_diagnostic_info(&self) -> NotificationDiagnostics {
+        let config = self.get_config();
+        
+        NotificationDiagnostics {
+            enabled: config.enabled,
+            preferred_method: config.preferred_method.clone(),
+            determined_method: self.determine_notification_method(&config),
+            dbus_available: self.is_dbus_notification_available(),
+            notify_send_available: self.is_notify_send_available(),
+            cache_size: self.notification_cache.lock().len(),
+            last_notification: *self.last_notification.read(),
+            cooldown_remaining: if !self.is_cooldown_expired() {
+                let last_notification = self.last_notification.read();
+                if let Some(last_time) = *last_notification {
+                    let elapsed = Utc::now().signed_duration_since(last_time);
+                    Some((self.notification_cooldown - elapsed).to_std().unwrap_or(std::time::Duration::ZERO))
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+        }
+    }
 }
 
 /// Information about the notification system status
@@ -482,4 +577,17 @@ pub struct NotificationSystemInfo {
     pub config: NotificationConfig,
     pub last_notification: Option<DateTime<Utc>>,
     pub cooldown_active: bool,
+}
+
+/// Detailed diagnostic information for troubleshooting
+#[derive(Debug)]
+pub struct NotificationDiagnostics {
+    pub enabled: bool,
+    pub preferred_method: String,
+    pub determined_method: NotificationMethod,
+    pub dbus_available: bool,
+    pub notify_send_available: bool,
+    pub cache_size: usize,
+    pub last_notification: Option<DateTime<Utc>>,
+    pub cooldown_remaining: Option<std::time::Duration>,
 }

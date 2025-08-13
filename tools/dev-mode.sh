@@ -41,6 +41,28 @@ check_waybar_running() {
     fi
 }
 
+# Find command with fallback options
+find_command() {
+    local cmd_name="$1"
+    local fallback_paths=("${@:2}")
+    
+    # First try PATH
+    if command -v "$cmd_name" >/dev/null 2>&1; then
+        echo "$cmd_name"
+        return 0
+    fi
+    
+    # Try fallback paths
+    for path in "${fallback_paths[@]}"; do
+        if [ -x "$path" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 start_dev_mode() {
     log "Starting Jasper development mode..."
     
@@ -58,6 +80,13 @@ start_dev_mode() {
         log "Stopping waybar..."
         pkill waybar || true
         sleep 1
+    fi
+    
+    # Find waybar command
+    local waybar_cmd
+    if ! waybar_cmd=$(find_command waybar "/run/current-system/sw/bin/waybar" "/usr/bin/waybar"); then
+        error "waybar command not found. Please ensure waybar is installed."
+        return 1
     fi
     
     # Backup existing configs (handle symlinks)
@@ -123,7 +152,7 @@ start_dev_mode() {
     
     # Start waybar with development config
     log "Starting waybar with development config..."
-    waybar &
+    "$waybar_cmd" &
     
     success "Development mode active!"
     success "✅ Waybar using development configs"
@@ -179,9 +208,16 @@ stop_dev_mode() {
     # Remove dev mode marker
     rm -f "$BACKUP_DIR/.dev-mode-active"
     
+    # Find waybar command
+    local waybar_cmd
+    if ! waybar_cmd=$(find_command waybar "/run/current-system/sw/bin/waybar" "/usr/bin/waybar"); then
+        error "waybar command not found. Please ensure waybar is installed."
+        return 1
+    fi
+    
     # Start waybar with NixOS config
     log "Starting waybar with NixOS config..."
-    waybar &
+    "$waybar_cmd" &
     
     success "Development mode stopped!"
     success "✅ NixOS-managed configs restored"
@@ -220,8 +256,15 @@ reload_waybar() {
         fi
     fi
     
+    # Find waybar command
+    local waybar_cmd
+    if ! waybar_cmd=$(find_command waybar "/run/current-system/sw/bin/waybar" "/usr/bin/waybar"); then
+        error "waybar command not found. Please ensure waybar is installed."
+        return 1
+    fi
+    
     # Start waybar again
-    waybar &
+    "$waybar_cmd" &
     
     success "Waybar reloaded with development config!"
 }

@@ -9,6 +9,7 @@ use crate::correlation_engine::CorrelationEngine;
 use crate::config::Config;
 use crate::frontend_framework::InsightData;
 use crate::frontend_manager::FrontendManager;
+use crate::error_recovery::ErrorRecovery;
 
 pub struct CompanionService {
     database: Database,
@@ -49,21 +50,29 @@ impl CompanionService {
     async fn refresh_insights(&self) -> Result<()> {
         debug!("Refreshing insights...");
         
-        // Use blocking approach to avoid zbus executor runtime issues
+        // Use spawn_blocking to avoid nested runtime issues
         let correlation_engine = self.correlation_engine.clone();
         let current_insights = self.current_insights.clone();
         
-        // Use thread spawn with blocking runtime to avoid zbus context issues
-        let correlations = std::thread::spawn(move || {
-            // Create a new Tokio runtime for this thread
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                correlation_engine.analyze().await
+        // Use tokio::task::spawn_blocking with error recovery for CPU-intensive analysis
+        let correlations = tokio::task::spawn_blocking(move || {
+            // Use the current runtime's block_on for async operations with retry logic
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async move {
+                ErrorRecovery::retry_with_backoff(
+                    || async { 
+                        correlation_engine.analyze().await
+                            .map_err(|e| crate::errors::JasperError::internal(e.to_string()))
+                    },
+                    3, // max attempts
+                    std::time::Duration::from_millis(500),
+                    "correlation analysis",
+                ).await
             })
         })
-        .join()
-        .map_err(|_| anyhow::anyhow!("Analysis thread panicked"))?
-        .context("Failed to analyze correlations for insights")?;
+        .await
+        .map_err(|join_error| anyhow::anyhow!("Analysis task failed: {}", join_error))?
+        .context("Failed to analyze correlations for insights after retries")?;
         
         *current_insights.lock() = correlations;
         info!("Refreshed insights: {} correlations found", current_insights.lock().len());
