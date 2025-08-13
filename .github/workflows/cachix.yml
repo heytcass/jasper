@@ -1,0 +1,39 @@
+name: Build and Cache
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      
+      # Install and setup cachix
+      - uses: cachix/cachix-action@v15
+        with:
+          name: jasper-companion  # You'll need to create this cache
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          pushFilter: "(-source$|nixpkgs\.tar\.gz$)"
+      
+      # Build all packages
+      - name: Build daemon
+        run: nix build .#daemon
+        
+      - name: Build GNOME extension
+        run: nix build .#gnome-extension
+        
+      - name: Build unified package
+        run: nix build .#default
+      
+      # Test the flake
+      - name: Check flake
+        run: nix flake check
+        
+      # Build development shell to cache dependencies
+      - name: Build dev shell
+        run: nix develop --command echo "Dev shell built successfully"
