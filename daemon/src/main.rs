@@ -25,6 +25,10 @@ mod formatters;
 mod frontend_manager;
 mod desktop_detection;
 
+// New command dispatcher - gradually replacing trait-based commands
+#[cfg(feature = "new-commands")]
+mod command_dispatcher;
+
 use config::Config;
 use database::DatabaseInner;
 use commands::{
@@ -121,32 +125,68 @@ async fn main() -> Result<()> {
 
     // Create shared command context
     let context = CommandContext::new(
-        config,
-        database,
-        correlation_engine,
+        config.clone(),
+        database.clone(),
+        correlation_engine.clone(),
         cli.debug,
         cli.test_mode,
     );
 
     // Execute the appropriate command
-    let mut command: Box<dyn Command> = match cli.command.unwrap_or(Commands::Start) {
-        Commands::Start => Box::new(StartCommand),
-        Commands::Status => Box::new(StatusCommand),
-        Commands::Stop => Box::new(StopCommand),
-        Commands::AuthGoogle => Box::new(AuthGoogleCommand),
-        Commands::TestCalendar => Box::new(TestCalendarCommand),
-        Commands::SyncTest => Box::new(SyncTestCommand),
-        Commands::CleanDatabase => Box::new(CleanDatabaseCommand),
-        Commands::SetApiKey { key } => Box::new(SetApiKeyCommand { api_key: key }),
-        Commands::Waybar { simple } => Box::new(WaybarCommand { simple }),
-        Commands::AddTestEvents => Box::new(AddTestEventsCommand),
-        Commands::ClearCache => Box::new(ClearCacheCommand),
-        Commands::TestNotification => Box::new(TestNotificationCommand),
-        Commands::DetectDesktop => Box::new(DetectDesktopCommand),
-    };
+    #[cfg(feature = "new-commands")]
+    {
+        use command_dispatcher::{CommandV2, ExecutionContext};
+        
+        let command_v2 = match cli.command.unwrap_or(Commands::Start) {
+            Commands::Start => CommandV2::Start,
+            Commands::Status => CommandV2::Status,
+            Commands::Stop => CommandV2::Stop,
+            Commands::AuthGoogle => CommandV2::AuthGoogle,
+            Commands::TestCalendar => CommandV2::TestCalendar,
+            Commands::SyncTest => CommandV2::SyncTest,
+            Commands::CleanDatabase => CommandV2::CleanDatabase,
+            Commands::SetApiKey { key } => CommandV2::SetApiKey { key },
+            Commands::Waybar { simple } => CommandV2::Waybar { simple },
+            Commands::AddTestEvents => CommandV2::AddTestEvents,
+            Commands::ClearCache => CommandV2::ClearCache,
+            Commands::TestNotification => CommandV2::TestNotification,
+            Commands::DetectDesktop => CommandV2::DetectDesktop,
+        };
+        
+        let exec_context = ExecutionContext::new(
+            config,
+            database,
+            correlation_engine,
+            cli.debug,
+            cli.test_mode,
+        );
+        
+        command_v2.execute(&exec_context).await
+            .context("Failed to execute command")?;
+    }
+    
+    #[cfg(feature = "legacy-commands")]
+    #[cfg(not(feature = "new-commands"))]
+    {
+        let mut command: Box<dyn Command> = match cli.command.unwrap_or(Commands::Start) {
+            Commands::Start => Box::new(StartCommand),
+            Commands::Status => Box::new(StatusCommand),
+            Commands::Stop => Box::new(StopCommand),
+            Commands::AuthGoogle => Box::new(AuthGoogleCommand),
+            Commands::TestCalendar => Box::new(TestCalendarCommand),
+            Commands::SyncTest => Box::new(SyncTestCommand),
+            Commands::CleanDatabase => Box::new(CleanDatabaseCommand),
+            Commands::SetApiKey { key } => Box::new(SetApiKeyCommand { api_key: key }),
+            Commands::Waybar { simple } => Box::new(WaybarCommand { simple }),
+            Commands::AddTestEvents => Box::new(AddTestEventsCommand),
+            Commands::ClearCache => Box::new(ClearCacheCommand),
+            Commands::TestNotification => Box::new(TestNotificationCommand),
+            Commands::DetectDesktop => Box::new(DetectDesktopCommand),
+        };
 
-    command.execute(&context).await
-        .context("Failed to execute command")?;
+        command.execute(&context).await
+            .context("Failed to execute command")?;
+    }
 
     Ok(())
 }

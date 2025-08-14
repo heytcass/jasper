@@ -20,7 +20,7 @@ Or manually add to your `configuration.nix`:
         "https://cache.nixos.org/"
       ];
       trusted-public-keys = [
-        "jasper.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
+        "jasper.cachix.org-1:k2lj9hHubn+aKyypIEjQG1HA1ZGyeO2lbfjsrWf9YVA="
         "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       ];
     };
