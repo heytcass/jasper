@@ -3,6 +3,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tracing::{info, debug};
 
+#[cfg(feature = "new-config")]
+use crate::config_v2;
 use crate::config::Config;
 use crate::database::Database;
 use crate::correlation_engine::CorrelationEngine;
@@ -32,6 +34,7 @@ pub enum CommandV2 {
 }
 
 /// Simple context struct without trait abstractions
+#[cfg(not(feature = "new-config"))]
 pub struct ExecutionContext {
     pub config: Arc<RwLock<Config>>,
     pub database: Database,
@@ -40,6 +43,7 @@ pub struct ExecutionContext {
     pub test_mode: bool,
 }
 
+#[cfg(not(feature = "new-config"))]
 impl ExecutionContext {
     pub fn new(
         config: Arc<RwLock<Config>>,
@@ -55,6 +59,68 @@ impl ExecutionContext {
             debug,
             test_mode,
         }
+    }
+}
+
+/// New execution context using static config - no locks!
+#[cfg(feature = "new-config")]
+pub struct ExecutionContext {
+    pub database: Database,
+    pub correlation_engine: CorrelationEngine,
+    pub debug: bool,
+    pub test_mode: bool,
+}
+
+#[cfg(feature = "new-config")]
+impl ExecutionContext {
+    pub fn new(
+        _config: Arc<RwLock<Config>>, // Ignored, for API compatibility
+        database: Database,
+        correlation_engine: CorrelationEngine,
+        debug: bool,
+        test_mode: bool,
+    ) -> Self {
+        Self {
+            database,
+            correlation_engine,
+            debug,
+            test_mode,
+        }
+    }
+    
+    /// Get current config without locks
+    pub fn config(&self) -> Arc<Config> {
+        config_v2::config()
+    }
+}
+
+// Helper macro to get config value from context regardless of feature flags
+#[cfg(not(feature = "new-config"))]
+macro_rules! get_config {
+    ($ctx:expr) => {
+        $ctx.config.read()
+    }
+}
+
+#[cfg(feature = "new-config")]
+macro_rules! get_config {
+    ($ctx:expr) => {
+        $ctx.config()
+    }
+}
+
+// Helper macro to get config for service creation
+#[cfg(not(feature = "new-config"))]
+macro_rules! get_config_for_service {
+    ($ctx:expr) => {
+        $ctx.config.clone()
+    }
+}
+
+#[cfg(feature = "new-config")]
+macro_rules! get_config_for_service {
+    ($ctx:expr) => {
+        Arc::new(RwLock::new($ctx.config().as_ref().clone()))
     }
 }
 
@@ -94,7 +160,7 @@ async fn execute_start(ctx: &ExecutionContext) -> Result<()> {
     DbusService::new(
         ctx.database.clone(),
         ctx.correlation_engine.clone(),
-        ctx.config.clone()
+        get_config_for_service!(ctx)
     ).await?;
     
     Ok(())
@@ -102,7 +168,7 @@ async fn execute_start(ctx: &ExecutionContext) -> Result<()> {
 
 async fn execute_status(ctx: &ExecutionContext) -> Result<()> {
     let companion = CompanionService::new(
-        ctx.config.clone(),
+        get_config_for_service!(ctx),
         ctx.database.clone(),
         ctx.correlation_engine.clone(),
     );
@@ -137,7 +203,10 @@ async fn execute_auth_google(ctx: &ExecutionContext) -> Result<()> {
     info!("Setting up Google Calendar authentication...");
     
     let gc_config = {
+        #[cfg(not(feature = "new-config"))]
         let config_guard = ctx.config.read();
+        #[cfg(feature = "new-config")]
+        let config_guard = ctx.config();
         config_guard.google_calendar.clone()
     };
 
@@ -153,7 +222,7 @@ async fn execute_auth_google(ctx: &ExecutionContext) -> Result<()> {
     println!("✅ Google Calendar configuration found");
     
     let sync_service = CalendarSyncService::new(
-        ctx.config.clone(),
+        get_config_for_service!(ctx),
         ctx.database.clone(),
     )?;
     
@@ -171,7 +240,7 @@ async fn execute_test_calendar(ctx: &ExecutionContext) -> Result<()> {
     info!("Testing Google Calendar integration...");
     
     let gc_config = {
-        let config_guard = ctx.config.read();
+        let config_guard = get_config!(ctx);
         config_guard.google_calendar.clone()
     };
 
@@ -180,7 +249,7 @@ async fn execute_test_calendar(ctx: &ExecutionContext) -> Result<()> {
     }
     
     let sync_service = CalendarSyncService::new(
-        ctx.config.clone(),
+        get_config_for_service!(ctx),
         ctx.database.clone(),
     )?;
     
@@ -198,7 +267,7 @@ async fn execute_sync_test(ctx: &ExecutionContext) -> Result<()> {
     info!("Testing calendar synchronization...");
     
     let gc_config = {
-        let config_guard = ctx.config.read();
+        let config_guard = get_config!(ctx);
         config_guard.google_calendar.clone()
     };
 
@@ -207,7 +276,7 @@ async fn execute_sync_test(ctx: &ExecutionContext) -> Result<()> {
     }
     
     let mut sync_service = CalendarSyncService::new(
-        ctx.config.clone(),
+        get_config_for_service!(ctx),
         ctx.database.clone(),
     )?;
     
@@ -233,9 +302,20 @@ async fn execute_set_api_key(ctx: &ExecutionContext, api_key: String) -> Result<
     info!("Setting Claude API key");
     
     {
-        let mut config = ctx.config.write();
-        config.ai.api_key = Some(api_key.clone());
-        config.save().await?;
+        #[cfg(not(feature = "new-config"))]
+        {
+            let mut config = ctx.config.write();
+            config.ai.api_key = Some(api_key.clone());
+            config.save().await?;
+        }
+        #[cfg(feature = "new-config")]
+        {
+            // With new config, we need to reload from disk
+            let mut config = ctx.config().as_ref().clone();
+            config.ai.api_key = Some(api_key.clone());
+            config.save().await?;
+            config_v2::reload_config().await?;
+        }
     }
     
     println!("✅ Claude API key saved to configuration");
@@ -248,7 +328,7 @@ async fn execute_waybar(ctx: &ExecutionContext, simple: bool) -> Result<()> {
     debug!("Generating Waybar output");
     
     let companion = CompanionService::new(
-        ctx.config.clone(),
+        get_config_for_service!(ctx),
         ctx.database.clone(),
         ctx.correlation_engine.clone(),
     );
@@ -259,7 +339,7 @@ async fn execute_waybar(ctx: &ExecutionContext, simple: bool) -> Result<()> {
             Vec::new()
         });
     
-    let timezone = ctx.config.read().get_timezone();
+    let timezone = get_config!(ctx).get_timezone();
     let formatter = WaybarFormatter::new(timezone);
     
     if simple {
@@ -302,7 +382,7 @@ async fn execute_test_notification(ctx: &ExecutionContext) -> Result<()> {
     info!("Testing notification system");
     
     // Convert from config::NotificationConfig to notification::NotificationConfig
-    let config_opt = ctx.config.read().get_notification_config().cloned();
+    let config_opt = get_config!(ctx).get_notification_config().cloned();
     let notification_config = if let Some(cfg) = config_opt {
         crate::services::notification::NotificationConfig {
             enabled: cfg.enabled,
