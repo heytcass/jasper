@@ -86,7 +86,7 @@ impl CalendarService {
         start: chrono::DateTime<chrono::Utc>,
         end: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<crate::database::Event>> {
-        self.database.get_events_in_range(start, end)
+        Ok(self.database.get_events_in_range(start, end)?)
     }
     
     /// Get current planning horizon events

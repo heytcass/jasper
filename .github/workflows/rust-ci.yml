@@ -19,7 +19,7 @@ jobs:
       # Use cachix for faster builds
       - uses: cachix/cachix-action@v15
         with:
-          name: jasper-companion
+          name: jasper
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       
       # Enter dev shell and run tests

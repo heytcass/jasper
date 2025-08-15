@@ -145,7 +145,7 @@ impl CalendarSyncService {
             .collect();
 
         // Use bulk insert with transaction handling
-        match self.database.create_events_bulk(&prepared_events).await {
+        match self.database.create_events_bulk(&prepared_events) {
             Ok(event_ids) => {
                 debug!("Successfully stored {} events using bulk operation", event_ids.len());
                 
@@ -172,7 +172,7 @@ impl CalendarSyncService {
                         continue;
                     }
 
-                    match self.database.create_event(&event).await {
+                    match self.database.create_event(&event) {
                         Ok(event_id) => {
                             debug!("Stored calendar event '{}' with ID: {}", 
                                    event.title.as_deref().unwrap_or("(no title)"), event_id);

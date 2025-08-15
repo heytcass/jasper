@@ -2,6 +2,8 @@ use anyhow::{Result, Context};
 use clap::{Parser, Subcommand};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 mod config;
 mod database;
@@ -24,7 +26,17 @@ mod frontend_framework;
 mod formatters;
 mod frontend_manager;
 mod desktop_detection;
+mod daemon_core;
 
+// New command dispatcher - gradually replacing trait-based commands
+#[cfg(feature = "new-commands")]
+mod command_dispatcher;
+
+// New config system - gradually replacing Arc<RwLock<Config>>
+#[cfg(feature = "new-config")]
+mod config_v2;
+
+#[cfg(not(feature = "new-config"))]
 use config::Config;
 use database::DatabaseInner;
 use commands::{
@@ -106,47 +118,102 @@ async fn main() -> Result<()> {
     info!("Jasper Companion Daemon starting up");
 
     // Load configuration
+    #[cfg(not(feature = "new-config"))]
     let config = Config::load().await
         .context("Failed to load application configuration")?;
+    
+    #[cfg(feature = "new-config")]
+    {
+        // Initialize the static config
+        config_v2::init_config().await
+            .context("Failed to initialize configuration")?;
+    }
+    
     info!("Configuration loaded successfully");
 
     // Initialize database
+    #[cfg(not(feature = "new-config"))]
     let db_path = config.read().get_database_path()?;
+    #[cfg(feature = "new-config")]
+    let db_path = config_v2::config().get_database_path()?;
+    
     let database = DatabaseInner::new(&db_path).await
         .with_context(|| format!("Failed to initialize database at {:?}", db_path))?;
     info!("Database initialized");
+
+    // Config is already Arc<RwLock<Config>> for legacy, wrap for new-config compatibility
+    #[cfg(not(feature = "new-config"))]
+    let config = config; // Already Arc<RwLock<Config>>
+    #[cfg(feature = "new-config")]
+    let config = Arc::new(RwLock::new(config_v2::config().as_ref().clone()));
 
     // Initialize correlation engine
     let correlation_engine = correlation_engine::CorrelationEngine::new(database.clone(), config.clone());
 
     // Create shared command context
     let context = CommandContext::new(
-        config,
-        database,
-        correlation_engine,
+        config.clone(),
+        database.clone(),
+        correlation_engine.clone(),
         cli.debug,
         cli.test_mode,
     );
 
     // Execute the appropriate command
-    let mut command: Box<dyn Command> = match cli.command.unwrap_or(Commands::Start) {
-        Commands::Start => Box::new(StartCommand),
-        Commands::Status => Box::new(StatusCommand),
-        Commands::Stop => Box::new(StopCommand),
-        Commands::AuthGoogle => Box::new(AuthGoogleCommand),
-        Commands::TestCalendar => Box::new(TestCalendarCommand),
-        Commands::SyncTest => Box::new(SyncTestCommand),
-        Commands::CleanDatabase => Box::new(CleanDatabaseCommand),
-        Commands::SetApiKey { key } => Box::new(SetApiKeyCommand { api_key: key }),
-        Commands::Waybar { simple } => Box::new(WaybarCommand { simple }),
-        Commands::AddTestEvents => Box::new(AddTestEventsCommand),
-        Commands::ClearCache => Box::new(ClearCacheCommand),
-        Commands::TestNotification => Box::new(TestNotificationCommand),
-        Commands::DetectDesktop => Box::new(DetectDesktopCommand),
-    };
+    #[cfg(feature = "new-commands")]
+    {
+        use command_dispatcher::{CommandV2, ExecutionContext};
+        
+        let command_v2 = match cli.command.unwrap_or(Commands::Start) {
+            Commands::Start => CommandV2::Start,
+            Commands::Status => CommandV2::Status,
+            Commands::Stop => CommandV2::Stop,
+            Commands::AuthGoogle => CommandV2::AuthGoogle,
+            Commands::TestCalendar => CommandV2::TestCalendar,
+            Commands::SyncTest => CommandV2::SyncTest,
+            Commands::CleanDatabase => CommandV2::CleanDatabase,
+            Commands::SetApiKey { key } => CommandV2::SetApiKey { key },
+            Commands::Waybar { simple } => CommandV2::Waybar { simple },
+            Commands::AddTestEvents => CommandV2::AddTestEvents,
+            Commands::ClearCache => CommandV2::ClearCache,
+            Commands::TestNotification => CommandV2::TestNotification,
+            Commands::DetectDesktop => CommandV2::DetectDesktop,
+        };
+        
+        let exec_context = ExecutionContext::new(
+            config,
+            database,
+            correlation_engine,
+            cli.debug,
+            cli.test_mode,
+        );
+        
+        command_v2.execute(&exec_context).await
+            .context("Failed to execute command")?;
+    }
+    
+    #[cfg(feature = "legacy-commands")]
+    #[cfg(not(feature = "new-commands"))]
+    {
+        let mut command: Box<dyn Command> = match cli.command.unwrap_or(Commands::Start) {
+            Commands::Start => Box::new(StartCommand),
+            Commands::Status => Box::new(StatusCommand),
+            Commands::Stop => Box::new(StopCommand),
+            Commands::AuthGoogle => Box::new(AuthGoogleCommand),
+            Commands::TestCalendar => Box::new(TestCalendarCommand),
+            Commands::SyncTest => Box::new(SyncTestCommand),
+            Commands::CleanDatabase => Box::new(CleanDatabaseCommand),
+            Commands::SetApiKey { key } => Box::new(SetApiKeyCommand { api_key: key }),
+            Commands::Waybar { simple } => Box::new(WaybarCommand { simple }),
+            Commands::AddTestEvents => Box::new(AddTestEventsCommand),
+            Commands::ClearCache => Box::new(ClearCacheCommand),
+            Commands::TestNotification => Box::new(TestNotificationCommand),
+            Commands::DetectDesktop => Box::new(DetectDesktopCommand),
+        };
 
-    command.execute(&context).await
-        .context("Failed to execute command")?;
+        command.execute(&context).await
+            .context("Failed to execute command")?;
+    }
 
     Ok(())
 }
