@@ -234,3 +234,54 @@ impl From<std::io::Error> for JasperError {
         }
     }
 }
+
+/// Convert rusqlite::Error to JasperError
+impl From<rusqlite::Error> for JasperError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Database {
+            operation: "sql_operation".to_string(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Convert serde_json::Error to JasperError  
+impl From<serde_json::Error> for JasperError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Parsing {
+            format: "JSON".to_string(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Convert toml::de::Error to JasperError
+impl From<toml::de::Error> for JasperError {
+    fn from(error: toml::de::Error) -> Self {
+        Self::Parsing {
+            format: "TOML".to_string(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Convert reqwest::Error to JasperError
+impl From<reqwest::Error> for JasperError {
+    fn from(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout {
+                operation: "HTTP request".to_string(),
+                timeout_seconds: 30, // Default assumption
+            }
+        } else if error.is_connect() {
+            Self::Network {
+                message: format!("Connection failed: {}", error),
+            }
+        } else {
+            Self::Api {
+                service: "HTTP".to_string(),
+                message: error.to_string(),
+            }
+        }
+    }
+}

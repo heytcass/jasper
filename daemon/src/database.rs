@@ -1,4 +1,5 @@
-use anyhow::{Result, Context};
+use anyhow::Context;
+use crate::errors::{JasperError, JasperResult};
 use rusqlite::{Connection, params, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,7 +62,7 @@ pub struct EnrichedEvent {
 }
 
 impl DatabaseInner {
-    pub async fn new(db_path: &PathBuf) -> Result<Database> {
+    pub async fn new(db_path: &PathBuf) -> JasperResult<Database> {
         // Ensure data directory exists
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await
@@ -88,7 +89,7 @@ impl DatabaseInner {
     }
     
     /// Configure a SQLite connection with optimal settings for performance and resilience
-    fn configure_connection(connection: &Connection) -> Result<()> {
+    fn configure_connection(connection: &Connection) -> JasperResult<()> {
         connection.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -104,7 +105,7 @@ impl DatabaseInner {
     }
     
     /// Recover from database connection issues by reopening the connection
-    fn recover_connection(&self) -> Result<()> {
+    fn recover_connection(&self) -> JasperResult<()> {
         warn!("Attempting to recover database connection");
         
         let new_connection = Connection::open(&self.db_path)
@@ -122,9 +123,9 @@ impl DatabaseInner {
     }
     
     /// Execute a database operation with automatic retry on connection failure
-    fn with_connection_retry<F, R>(&self, operation: F) -> Result<R>
+    fn with_connection_retry<F, R>(&self, operation: F) -> JasperResult<R>
     where
-        F: Fn(&Connection) -> Result<R> + Copy,
+        F: Fn(&Connection) -> JasperResult<R> + Copy,
     {
         // First attempt
         {
@@ -152,7 +153,7 @@ impl DatabaseInner {
     }
     
     /// Check if an error indicates a connection issue
-    fn is_connection_error(&self, error: &anyhow::Error) -> bool {
+    fn is_connection_error(&self, error: &JasperError) -> bool {
         let error_msg = error.to_string().to_lowercase();
         
         // SQLite connection-related errors
@@ -169,7 +170,7 @@ impl DatabaseInner {
         error_msg.contains("attempt to write a readonly database")
     }
 
-    fn run_migrations(&self) -> Result<()> {
+    fn run_migrations(&self) -> JasperResult<()> {
         let conn = self.connection.lock();
         
         // Enable foreign keys
@@ -352,13 +353,13 @@ impl DatabaseInner {
         Ok(())
     }
 
-    pub fn get_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Event>> {
+    pub fn get_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> JasperResult<Vec<Event>> {
         // Use pagination internally to limit memory usage
         self.get_events_in_range_paginated(start, end, None, None)
     }
 
     /// Get events in range with pagination support for large datasets
-    pub fn get_events_in_range_paginated(&self, start: DateTime<Utc>, end: DateTime<Utc>, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<Event>> {
+    pub fn get_events_in_range_paginated(&self, start: DateTime<Utc>, end: DateTime<Utc>, limit: Option<usize>, offset: Option<usize>) -> JasperResult<Vec<Event>> {
         self.with_connection_retry(|conn| {
             let base_query = "SELECT id, source_id, calendar_id, title, description, start_time, end_time, 
                                     location, event_type, participants, raw_data_json, is_all_day
@@ -404,9 +405,9 @@ impl DatabaseInner {
     }
 
     /// Process events in batches to avoid loading large datasets into memory
-    pub fn process_events_in_batches<F>(&self, start: DateTime<Utc>, end: DateTime<Utc>, batch_size: usize, mut processor: F) -> Result<()>
+    pub fn process_events_in_batches<F>(&self, start: DateTime<Utc>, end: DateTime<Utc>, batch_size: usize, mut processor: F) -> JasperResult<()>
     where
-        F: FnMut(&[Event]) -> Result<()>,
+        F: FnMut(&[Event]) -> JasperResult<()>,
     {
         const DEFAULT_BATCH_SIZE: usize = 1000;
         let batch_size = if batch_size == 0 { DEFAULT_BATCH_SIZE } else { batch_size };
@@ -435,7 +436,7 @@ impl DatabaseInner {
     }
 
     /// Count total events in range without loading them into memory
-    pub fn count_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<i64> {
+    pub fn count_events_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> JasperResult<i64> {
         self.with_connection_retry(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT COUNT(*) FROM events 
@@ -451,7 +452,7 @@ impl DatabaseInner {
         })
     }
 
-    pub fn create_event(&self, event: &Event) -> Result<i64> {
+    pub fn create_event(&self, event: &Event) -> JasperResult<i64> {
         self.with_connection_retry(|conn| {
             let _result = conn.execute(
                 "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
@@ -477,7 +478,7 @@ impl DatabaseInner {
     }
 
     /// Bulk create events with deduplication check and transaction handling
-    pub fn create_events_bulk(&self, events: &[Event]) -> Result<Vec<i64>> {
+    pub fn create_events_bulk(&self, events: &[Event]) -> JasperResult<Vec<i64>> {
         self.with_connection_retry(|conn| {
             let mut event_ids = Vec::with_capacity(events.len());
             
@@ -535,7 +536,7 @@ impl DatabaseInner {
     }
 
     /// Check which events already exist by source_id (for pre-filtering)
-    pub fn get_existing_source_ids(&self, source_ids: &[String]) -> Result<HashSet<String>> {
+    pub fn get_existing_source_ids(&self, source_ids: &[String]) -> JasperResult<HashSet<String>> {
         self.with_connection_retry(|conn| {
             let mut existing = HashSet::new();
             
@@ -569,7 +570,7 @@ impl DatabaseInner {
         })
     }
 
-    pub fn get_event_by_source_id(&self, source_id: &str) -> Result<Option<Event>> {
+    pub fn get_event_by_source_id(&self, source_id: &str) -> JasperResult<Option<Event>> {
         let conn = self.connection.lock();
         let mut stmt = conn.prepare(
             "SELECT id, source_id, calendar_id, title, description, start_time, end_time,
@@ -606,7 +607,7 @@ impl DatabaseInner {
 
     
     /// Delete test events from the database (for cleanup operations)
-    pub fn delete_test_events(&self) -> Result<usize> {
+    pub fn delete_test_events(&self) -> JasperResult<usize> {
         let conn = self.connection.lock();
         let count = conn.execute(
             "DELETE FROM events WHERE calendar_id IN (
@@ -620,7 +621,7 @@ impl DatabaseInner {
     }
     
     /// Delete test calendars from the database (for cleanup operations)
-    pub fn delete_test_calendars(&self) -> Result<usize> {
+    pub fn delete_test_calendars(&self) -> JasperResult<usize> {
         let conn = self.connection.lock();
         let count = conn.execute(
             "DELETE FROM calendars WHERE account_id IN (
@@ -632,7 +633,7 @@ impl DatabaseInner {
     }
     
     /// Delete test accounts from the database (for cleanup operations)
-    pub fn delete_test_accounts(&self) -> Result<usize> {
+    pub fn delete_test_accounts(&self) -> JasperResult<usize> {
         let conn = self.connection.lock();
         let count = conn.execute(
             "DELETE FROM accounts WHERE service_name = ?", 
@@ -642,7 +643,7 @@ impl DatabaseInner {
     }
     
     /// Insert test account (for testing purposes only)
-    pub fn insert_test_account(&self, timestamp: i64) -> Result<()> {
+    pub fn insert_test_account(&self, timestamp: i64) -> JasperResult<()> {
         let conn = self.connection.lock();
         conn.execute(
             "INSERT OR REPLACE INTO accounts (id, service_name, user_identifier, encrypted_refresh_token, last_sync_timestamp)
@@ -653,7 +654,7 @@ impl DatabaseInner {
     }
     
     /// Insert test calendar (for testing purposes only) 
-    pub fn insert_test_calendar(&self, id: i64, calendar_id: &str, name: &str, calendar_type: &str, color: &str) -> Result<()> {
+    pub fn insert_test_calendar(&self, id: i64, calendar_id: &str, name: &str, calendar_type: &str, color: &str) -> JasperResult<()> {
         let conn = self.connection.lock();
         conn.execute(
             "INSERT OR REPLACE INTO calendars (id, account_id, calendar_id, calendar_name, calendar_type, color)
@@ -665,7 +666,7 @@ impl DatabaseInner {
     
     /// Insert test event (for testing purposes only)
     pub fn insert_test_event(&self, source_id: &str, calendar_id: i64, title: &str, description: &str, 
-                           start_time: i64, end_time: i64, event_type: &str) -> Result<()> {
+                           start_time: i64, end_time: i64, event_type: &str) -> JasperResult<()> {
         let conn = self.connection.lock();
         conn.execute(
             "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time, event_type)
@@ -677,7 +678,7 @@ impl DatabaseInner {
     }
 
     /// Create or update calendar record
-    pub fn create_or_update_calendar(&self, calendar_id: &str, calendar_name: &str, calendar_type: Option<&str>) -> Result<i64> {
+    pub fn create_or_update_calendar(&self, calendar_id: &str, calendar_name: &str, calendar_type: Option<&str>) -> JasperResult<i64> {
         let conn = self.connection.lock();
         
         // First, ensure we have an account record for Google Calendar
@@ -710,7 +711,7 @@ impl DatabaseInner {
     
 
     /// Get calendar information by internal ID
-    pub fn get_calendar_info(&self, calendar_id: i64) -> Result<Option<Calendar>> {
+    pub fn get_calendar_info(&self, calendar_id: i64) -> JasperResult<Option<Calendar>> {
         let conn = self.connection.lock();
         let calendar = conn.query_row(
             "SELECT id, account_id, calendar_id, calendar_name, calendar_type, color, metadata FROM calendars WHERE id = ?",
@@ -729,7 +730,7 @@ impl DatabaseInner {
     }
     
     /// Ensure Google account record exists
-    fn ensure_google_account(&self, conn: &rusqlite::Connection) -> Result<i64> {
+    fn ensure_google_account(&self, conn: &rusqlite::Connection) -> JasperResult<i64> {
         // Try to find existing Google account
         let existing_id: Option<i64> = conn.query_row(
             "SELECT id FROM accounts WHERE service_name = 'google'",

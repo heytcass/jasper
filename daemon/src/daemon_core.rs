@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::errors::{JasperError, JasperResult};
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tracing::{info, debug, warn};
@@ -82,7 +82,7 @@ impl DaemonCore {
     // ============================================================================
     
     /// Perform a full analysis cycle: sync calendars + analyze + generate insights
-    pub async fn analyze_full(&mut self) -> Result<Vec<Correlation>> {
+    pub async fn analyze_full(&mut self) -> JasperResult<Vec<Correlation>> {
         info!("Starting full analysis cycle");
         
         // Step 1: Sync calendar data
@@ -100,7 +100,7 @@ impl DaemonCore {
     }
     
     /// Quick analysis using only existing data (for Waybar)
-    pub async fn analyze_quick(&self) -> Result<Vec<Correlation>> {
+    pub async fn analyze_quick(&self) -> JasperResult<Vec<Correlation>> {
         debug!("Running quick analysis with existing data");
         self.analyze_insights().await
     }
@@ -144,7 +144,7 @@ impl DaemonCore {
     // ============================================================================
     
     /// Sync all configured calendars
-    pub async fn sync_calendars(&mut self) -> Result<()> {
+    pub async fn sync_calendars(&mut self) -> JasperResult<()> {
         if let Some(ref mut sync) = self.calendar_sync {
             info!("Syncing calendars");
             sync.sync_calendars().await?;
@@ -165,27 +165,27 @@ impl DaemonCore {
     }
     
     /// Get authentication URL for setup
-    pub fn get_auth_url(&self) -> Result<Option<(String, String)>> {
+    pub fn get_auth_url(&self) -> JasperResult<Option<(String, String)>> {
         if let Some(ref sync) = self.calendar_sync {
-            sync.get_auth_url()
+            Ok(sync.get_auth_url()?)
         } else {
             Ok(None)
         }
     }
     
     /// Complete authentication with authorization code
-    pub async fn authenticate_with_code(&mut self, auth_code: &str, csrf_token: &str) -> Result<()> {
+    pub async fn authenticate_with_code(&mut self, auth_code: &str, csrf_token: &str) -> JasperResult<()> {
         if let Some(ref mut sync) = self.calendar_sync {
-            sync.authenticate_with_code(auth_code, csrf_token).await
+            Ok(sync.authenticate_with_code(auth_code, csrf_token).await?)
         } else {
-            Err(anyhow::anyhow!("Calendar sync not configured"))
+            Err(JasperError::calendar_sync("Calendar sync not configured"))
         }
     }
     
     /// List available calendars
-    pub async fn list_calendars(&mut self) -> Result<Vec<(String, String)>> {
+    pub async fn list_calendars(&mut self) -> JasperResult<Vec<(String, String)>> {
         if let Some(ref mut sync) = self.calendar_sync {
-            sync.list_calendars().await
+            Ok(sync.list_calendars().await?)
         } else {
             Ok(Vec::new())
         }
@@ -196,12 +196,12 @@ impl DaemonCore {
         &self,
         start: chrono::DateTime<chrono::Utc>,
         end: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<Event>> {
-        self.database.get_events_in_range(start, end)
+    ) -> JasperResult<Vec<Event>> {
+        Ok(self.database.get_events_in_range(start, end)?)
     }
     
     /// Get current planning horizon events
-    pub fn get_planning_horizon_events(&self) -> Result<Vec<Event>> {
+    pub fn get_planning_horizon_events(&self) -> JasperResult<Vec<Event>> {
         let planning_horizon = self.get_planning_horizon();
         let now = chrono::Utc::now();
         let future_window = now + planning_horizon;
@@ -214,7 +214,7 @@ impl DaemonCore {
     // ============================================================================
     
     /// Run full correlation analysis and generate insights
-    pub async fn analyze_insights(&self) -> Result<Vec<Correlation>> {
+    pub async fn analyze_insights(&self) -> JasperResult<Vec<Correlation>> {
         debug!("Starting insight analysis");
         
         let correlations = self.correlation_engine.analyze().await?;
@@ -233,7 +233,7 @@ impl DaemonCore {
     }
     
     /// Get the most urgent insight for display
-    pub async fn get_most_urgent_insight(&self) -> Result<Option<Correlation>> {
+    pub async fn get_most_urgent_insight(&self) -> JasperResult<Option<Correlation>> {
         let correlations = self.analyze_insights().await?;
         
         // Find correlation with highest urgency score
@@ -245,7 +245,7 @@ impl DaemonCore {
     }
     
     /// Get insights filtered by urgency level
-    pub async fn get_insights_by_urgency(&self, min_urgency: i32) -> Result<Vec<Correlation>> {
+    pub async fn get_insights_by_urgency(&self, min_urgency: i32) -> JasperResult<Vec<Correlation>> {
         let correlations = self.analyze_insights().await?;
         
         let filtered: Vec<Correlation> = correlations
@@ -276,7 +276,7 @@ impl DaemonCore {
     }
     
     /// Force refresh of insights (bypassing cache)
-    pub async fn force_refresh(&self) -> Result<Vec<Correlation>> {
+    pub async fn force_refresh(&self) -> JasperResult<Vec<Correlation>> {
         debug!("Forcing insight analysis refresh");
         self.clear_caches();
         self.analyze_insights().await
