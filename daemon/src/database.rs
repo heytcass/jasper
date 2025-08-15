@@ -80,7 +80,7 @@ impl DatabaseInner {
             db_path: db_path.clone(),
         });
 
-        db.run_migrations().await
+        db.run_migrations()
             .context("Failed to run database migrations")?;
         info!("Database initialized at {:?}", db_path);
 
@@ -169,7 +169,7 @@ impl DatabaseInner {
         error_msg.contains("attempt to write a readonly database")
     }
 
-    async fn run_migrations(&self) -> Result<()> {
+    fn run_migrations(&self) -> Result<()> {
         let conn = self.connection.lock();
         
         // Enable foreign keys
@@ -451,7 +451,7 @@ impl DatabaseInner {
         })
     }
 
-    pub async fn create_event(&self, event: &Event) -> Result<i64> {
+    pub fn create_event(&self, event: &Event) -> Result<i64> {
         self.with_connection_retry(|conn| {
             let _result = conn.execute(
                 "INSERT INTO events (source_id, calendar_id, title, description, start_time, end_time,
@@ -477,7 +477,7 @@ impl DatabaseInner {
     }
 
     /// Bulk create events with deduplication check and transaction handling
-    pub async fn create_events_bulk(&self, events: &[Event]) -> Result<Vec<i64>> {
+    pub fn create_events_bulk(&self, events: &[Event]) -> Result<Vec<i64>> {
         self.with_connection_retry(|conn| {
             let mut event_ids = Vec::with_capacity(events.len());
             
