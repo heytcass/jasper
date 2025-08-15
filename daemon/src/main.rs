@@ -26,6 +26,7 @@ mod frontend_framework;
 mod formatters;
 mod frontend_manager;
 mod desktop_detection;
+mod daemon_core;
 
 // New command dispatcher - gradually replacing trait-based commands
 #[cfg(feature = "new-commands")]
@@ -140,9 +141,9 @@ async fn main() -> Result<()> {
         .with_context(|| format!("Failed to initialize database at {:?}", db_path))?;
     info!("Database initialized");
 
-    // Create config wrapper for compatibility
+    // Config is already Arc<RwLock<Config>> for legacy, wrap for new-config compatibility
     #[cfg(not(feature = "new-config"))]
-    let config = Arc::new(RwLock::new(config));
+    let config = config; // Already Arc<RwLock<Config>>
     #[cfg(feature = "new-config")]
     let config = Arc::new(RwLock::new(config_v2::config().as_ref().clone()));
 

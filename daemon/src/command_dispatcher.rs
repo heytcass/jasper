@@ -12,7 +12,7 @@ use crate::calendar_sync::CalendarSyncService;
 use crate::dbus_service::CompanionService as DbusService;
 use crate::waybar_formatter::WaybarFormatter;
 use crate::services::notification::{NotificationService, NotificationType};
-use crate::services::CompanionService;
+use crate::daemon_core::DaemonCore;
 use crate::test_data;
 
 /// Enum representing all possible commands - no trait objects, no vtables
@@ -167,13 +167,13 @@ async fn execute_start(ctx: &ExecutionContext) -> Result<()> {
 }
 
 async fn execute_status(ctx: &ExecutionContext) -> Result<()> {
-    let companion = CompanionService::new(
+    let daemon = DaemonCore::new(
         get_config_for_service!(ctx),
         ctx.database.clone(),
         ctx.correlation_engine.clone(),
     );
     
-    let status = companion.get_status().await;
+    let status = daemon.get_status().await;
     
     println!("🔍 Jasper Companion Status");
     println!("═══════════════════════════");
@@ -327,13 +327,13 @@ async fn execute_set_api_key(ctx: &ExecutionContext, api_key: String) -> Result<
 async fn execute_waybar(ctx: &ExecutionContext, simple: bool) -> Result<()> {
     debug!("Generating Waybar output");
     
-    let companion = CompanionService::new(
+    let daemon = DaemonCore::new(
         get_config_for_service!(ctx),
         ctx.database.clone(),
         ctx.correlation_engine.clone(),
     );
     
-    let correlations = companion.analyze_quick().await
+    let correlations = daemon.analyze_quick().await
         .unwrap_or_else(|e| {
             debug!("Analysis failed: {}", e);
             Vec::new()
