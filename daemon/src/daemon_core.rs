@@ -311,6 +311,19 @@ impl DaemonCore {
             config_v2::config().ai.api_key.is_some()
         }
     }
+    
+    /// Get timezone from config
+    pub fn get_timezone(&self) -> chrono_tz::Tz {
+        #[cfg(not(feature = "new-config"))]
+        {
+            self.config.read().get_timezone()
+        }
+        
+        #[cfg(feature = "new-config")]
+        {
+            config_v2::config().get_timezone()
+        }
+    }
 }
 
 /// System status information - renamed from CompanionStatus

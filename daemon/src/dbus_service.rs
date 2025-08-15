@@ -1,21 +1,22 @@
 use anyhow::{Result, Context};
 use zbus::ConnectionBuilder;
 use std::sync::Arc;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use tracing::{info, debug, warn};
 
+#[cfg(feature = "new-config")]
+use crate::config_v2;
+use crate::config::Config;
 use crate::database::Database;
 use crate::correlation_engine::CorrelationEngine;
-use crate::config::Config;
 use crate::frontend_framework::InsightData;
 use crate::frontend_manager::FrontendManager;
-use crate::error_recovery::ErrorRecovery;
 
 pub struct CompanionService {
     database: Database,
     correlation_engine: CorrelationEngine,
-    current_insights: Arc<Mutex<Vec<crate::database::Correlation>>>,
-    config: Arc<parking_lot::RwLock<Config>>,
+    #[cfg(not(feature = "new-config"))]
+    config: Arc<RwLock<Config>>,
     frontend_manager: FrontendManager,
 }
 
@@ -23,13 +24,13 @@ impl CompanionService {
     pub async fn new(database: Database, correlation_engine: CorrelationEngine, config: Arc<parking_lot::RwLock<Config>>) -> Result<()> {
         let service = CompanionService {
             database: database.clone(),
-            correlation_engine,
-            current_insights: Arc::new(Mutex::new(Vec::new())),
-            config,
+            correlation_engine: correlation_engine.clone(),
+            #[cfg(not(feature = "new-config"))]
+            config: config.clone(),
             frontend_manager: FrontendManager::new(),
         };
 
-        // Analyze correlations on startup
+        // Initial analysis on startup
         service.refresh_insights().await
             .context("Failed to refresh insights on D-Bus service startup")?;
 
@@ -50,32 +51,11 @@ impl CompanionService {
     async fn refresh_insights(&self) -> Result<()> {
         debug!("Refreshing insights...");
         
-        // Use spawn_blocking to avoid nested runtime issues
-        let correlation_engine = self.correlation_engine.clone();
-        let current_insights = self.current_insights.clone();
+        // Use correlation engine directly - simpler and avoids locks across awaits
+        let correlations = self.correlation_engine.analyze().await
+            .context("Failed to analyze correlations for insights")?;
         
-        // Use tokio::task::spawn_blocking with error recovery for CPU-intensive analysis
-        let correlations = tokio::task::spawn_blocking(move || {
-            // Use the current runtime's block_on for async operations with retry logic
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async move {
-                ErrorRecovery::retry_with_backoff(
-                    || async { 
-                        correlation_engine.analyze().await
-                            .map_err(|e| crate::errors::JasperError::internal(e.to_string()))
-                    },
-                    3, // max attempts
-                    std::time::Duration::from_millis(500),
-                    "correlation analysis",
-                ).await
-            })
-        })
-        .await
-        .map_err(|join_error| anyhow::anyhow!("Analysis task failed: {}", join_error))?
-        .context("Failed to analyze correlations for insights after retries")?;
-        
-        *current_insights.lock() = correlations;
-        info!("Refreshed insights: {} correlations found", current_insights.lock().len());
+        info!("Refreshed insights: {} correlations found", correlations.len());
         Ok(())
     }
 }
@@ -84,33 +64,47 @@ impl CompanionService {
 impl CompanionService {
     /// Get current insight using "THE Insight" model
     async fn get_current_insight(&self) -> (String, String, String, i32, String) {
-        let insights = self.current_insights.lock();
-        
-        if let Some(correlation) = insights.first() {
-            // Generate insight ID from correlation data
-            let insight_id = format!("insight_{}", correlation.id);
-            
-            // For now, use simplified extraction to avoid crashes
-            let emoji = "🎯".to_string(); // Use a fixed emoji
-            let action = correlation.insight.clone(); // Use full insight for now
-            
-            (emoji, action, "".to_string(), correlation.urgency_score, insight_id)
-        } else {
-            ("🔍".to_string(), "Analyzing your digital patterns...".to_string(), "No insights available right now".to_string(), 0, "".to_string())
+        // Use correlation engine directly - no locks needed!
+        match self.correlation_engine.analyze().await {
+            Ok(insights) => {
+                if let Some(correlation) = insights.first() {
+                    // Generate insight ID from correlation data
+                    let insight_id = format!("insight_{}", correlation.id);
+                    
+                    // For now, use simplified extraction to avoid crashes
+                    let emoji = "🎯".to_string(); // Use a fixed emoji
+                    let action = correlation.insight.clone(); // Use full insight for now
+                    
+                    (emoji, action, "".to_string(), correlation.urgency_score, insight_id)
+                } else {
+                    ("🔍".to_string(), "Analyzing your digital patterns...".to_string(), "No insights available right now".to_string(), 0, "".to_string())
+                }
+            }
+            Err(e) => {
+                warn!("Failed to get current insight: {}", e);
+                ("⚠️".to_string(), "Analysis temporarily unavailable".to_string(), "".to_string(), 0, "".to_string())
+            }
         }
     }
 
     /// Get detailed insight information for progressive disclosure
     async fn get_insight_details(&self, insight_id: String) -> (String, String) {
-        let insights = self.current_insights.lock();
-        
-        // Find the correlation by ID
-        if let Some(correlation) = insights.iter().find(|c| format!("insight_{}", c.id) == insight_id) {
-            let reasoning = format!("This insight is based on patterns in your calendar data. Urgency level: {}/10", correlation.urgency_score);
-            let full_data = format!("Action needed: {}\nFull insight: {}", correlation.action_needed, correlation.insight);
-            (reasoning, full_data)
-        } else {
-            ("No details available".to_string(), "Insight not found".to_string())
+        // Get current insights directly from correlation engine
+        match self.correlation_engine.analyze().await {
+            Ok(insights) => {
+                // Find the correlation by ID
+                if let Some(correlation) = insights.iter().find(|c| format!("insight_{}", c.id) == insight_id) {
+                    let reasoning = format!("This insight is based on patterns in your calendar data. Urgency level: {}/10", correlation.urgency_score);
+                    let full_data = format!("Action needed: {}\nFull insight: {}", correlation.action_needed, correlation.insight);
+                    (reasoning, full_data)
+                } else {
+                    ("No details available".to_string(), "Insight not found".to_string())
+                }
+            }
+            Err(e) => {
+                warn!("Failed to get insight details: {}", e);
+                ("Analysis unavailable".to_string(), "Unable to retrieve insight details".to_string())
+            }
         }
     }
 
@@ -141,15 +135,29 @@ impl CompanionService {
     }
 
 
-    /// Get daemon status
+    /// Get daemon status  
     async fn get_status(&self) -> String {
-        "Observing".to_string()
+        // For now, return a simple status - can be enhanced later
+        "D-Bus Service Active".to_string()
     }
 
     /// Get insights formatted for any supported frontend
     async fn get_formatted_insights(&self, frontend_id: String) -> String {
-        let correlations = self.current_insights.lock().clone();
+        // Get correlations directly from correlation engine
+        let correlations = match self.correlation_engine.analyze().await {
+            Ok(correlations) => correlations,
+            Err(e) => {
+                warn!("Failed to get correlations for formatting: {}", e);
+                Vec::new()
+            }
+        };
+        
+        // Get timezone from config
+        #[cfg(not(feature = "new-config"))]
         let timezone = self.config.read().get_timezone();
+        
+        #[cfg(feature = "new-config")]
+        let timezone = config_v2::config().get_timezone();
         
         // Convert correlations to InsightData format
         let insights: Vec<InsightData> = correlations.iter()
