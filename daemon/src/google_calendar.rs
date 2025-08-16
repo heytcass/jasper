@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::database::Event;
 use crate::http_utils::{handle_google_api_response, handle_oauth2_response_with_text, parse_json_response};
-use crate::error_recovery::{ErrorRecovery, CircuitBreaker};
+use crate::error_recovery::CircuitBreaker;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCalendarConfig {

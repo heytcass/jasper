@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Structured error types for the Jasper companion daemon
 #[derive(Error, Debug, Clone)]
+#[allow(dead_code)]
 pub enum JasperError {
     /// Configuration errors
     #[error("Configuration error: {message}")]

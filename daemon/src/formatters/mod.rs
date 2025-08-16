@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod waybar;
 pub mod terminal;
 pub mod gnome;

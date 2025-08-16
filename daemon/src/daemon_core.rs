@@ -12,6 +12,7 @@ use crate::calendar_sync::CalendarSyncService;
 
 /// Single flattened daemon that combines all business logic
 /// No service layers, no indirection - direct implementation as Linus suggested
+#[allow(dead_code)]
 pub struct DaemonCore {
     // Core dependencies
     #[cfg(not(feature = "new-config"))]
@@ -328,6 +329,7 @@ impl DaemonCore {
 
 /// System status information - renamed from CompanionStatus
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct DaemonStatus {
     pub is_calendar_authenticated: bool,
     pub has_api_key: bool,

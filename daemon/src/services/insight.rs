@@ -7,6 +7,7 @@ use crate::correlation_engine::CorrelationEngine;
 use crate::database::Correlation;
 
 /// Service for AI insight generation and analysis
+#[allow(dead_code)]
 pub struct InsightService {
     correlation_engine: CorrelationEngine,
     last_analysis: Arc<RwLock<Option<chrono::DateTime<chrono::Utc>>>>,

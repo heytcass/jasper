@@ -9,6 +9,7 @@ use crate::correlation_engine::CorrelationEngine;
 use super::{CalendarService, InsightService};
 
 /// Main companion service that orchestrates all business logic
+#[allow(dead_code)]
 pub struct CompanionService {
     config: Arc<RwLock<Config>>,
     database: Database,
@@ -94,6 +95,7 @@ impl CompanionService {
 
 /// System status information
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CompanionStatus {
     pub is_calendar_authenticated: bool,
     pub has_api_key: bool,

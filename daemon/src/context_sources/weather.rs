@@ -2,9 +2,9 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 use super::{
     ContextSource, ContextData, ContextDataType, ContextContent, WeatherContext, WeatherForecast
@@ -12,6 +12,7 @@ use super::{
 
 /// OpenWeatherMap API response structures
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenWeatherMapResponse {
     coord: Coord,
     weather: Vec<Weather>,
@@ -29,12 +30,14 @@ struct OpenWeatherMapResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Coord {
     lon: f64,
     lat: f64,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Weather {
     id: i32,
     main: String,
@@ -43,6 +46,7 @@ struct Weather {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Main {
     temp: f64,
     feels_like: f64,
@@ -55,6 +59,7 @@ struct Main {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Wind {
     speed: f64,
     deg: i32,
@@ -62,6 +67,7 @@ struct Wind {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Rain {
     #[serde(rename = "1h")]
     one_hour: Option<f64>,
@@ -70,6 +76,7 @@ struct Rain {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Snow {
     #[serde(rename = "1h")]
     one_hour: Option<f64>,
@@ -78,6 +85,7 @@ struct Snow {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Sys {
     #[serde(rename = "type")]
     sys_type: Option<i32>,
@@ -89,6 +97,7 @@ struct Sys {
 
 // 5-day forecast API response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ForecastResponse {
     cod: String,
     message: i32,
@@ -98,6 +107,7 @@ struct ForecastResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ForecastItem {
     dt: i64,
     main: Main,
@@ -113,16 +123,19 @@ struct ForecastItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Clouds {
     all: i32,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ForecastSys {
     pod: String, // Part of day (n-night, d-day)
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct City {
     id: i64,
     name: String,

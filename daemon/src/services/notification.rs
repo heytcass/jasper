@@ -481,7 +481,7 @@ impl NotificationService {
         // Use spawn_blocking to test D-Bus availability in a blocking context
         let rt = tokio::runtime::Handle::try_current();
         match rt {
-            Ok(handle) => {
+            Ok(_handle) => {
                 // We're in an async context, use spawn_blocking
                 let result = std::thread::spawn(move || {
                     // Try to create a minimal notification without showing it
@@ -581,6 +581,7 @@ pub struct NotificationSystemInfo {
 
 /// Detailed diagnostic information for troubleshooting
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct NotificationDiagnostics {
     pub enabled: bool,
     pub preferred_method: String,

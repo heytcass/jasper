@@ -14,7 +14,7 @@ struct SimpleInsightCache {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ApiCallStats {
+pub struct ApiCallStats {
     calls_today: u32,
     daily_limit: u32,
     last_reset: DateTime<Utc>,

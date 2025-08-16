@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{warn, debug, error};
@@ -5,6 +7,7 @@ use tracing::{warn, debug, error};
 use crate::errors::{JasperError, JasperResult, ErrorCategory};
 
 /// Error recovery strategies for common failure scenarios
+#[allow(dead_code)]
 pub struct ErrorRecovery;
 
 impl ErrorRecovery {

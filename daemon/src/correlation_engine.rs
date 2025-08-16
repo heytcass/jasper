@@ -427,7 +427,7 @@ impl CorrelationEngine {
     }
     
     /// Direct Obsidian data fetch without complex abstractions
-    async fn fetch_obsidian_data_direct(&self, vault_path: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<ContextData> {
+    async fn fetch_obsidian_data_direct(&self, vault_path: &str, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<ContextData> {
         use std::path::Path;
         use tokio::fs;
         
@@ -749,7 +749,7 @@ impl CorrelationEngine {
         let current_day = now_local.format("%A, %B %d, %Y").to_string();
         
         // Get personality configuration values from config
-        let (personality_guidance, childcare_helper_term, persona_reference) = {
+        let (personality_guidance, childcare_helper_term, _persona_reference) = {
             let config_guard = self.config.read();
             let (personality_config, _) = config_guard.get_personality_config();
             
@@ -1228,7 +1228,7 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
             debug!("Full context hash changed, checking if semantic similarity allows reuse");
             
             // Before generating a new insight, check if the previous one is still semantically relevant
-            if let Some(ref last_insight) = state.last_insight {
+            if let Some(ref _last_insight) = state.last_insight {
                 if self.is_context_semantically_similar(&state, additional_context) {
                     debug!("Context changed but semantically similar, keeping existing insight");
                     return false;
@@ -1303,7 +1303,7 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
     
     fn has_significant_context_changes(&self, events: &[Event], additional_context: &[crate::context_sources::ContextData], state: &ContextState) -> bool {
         // Check for significant calendar event changes
-        let current_event_count = events.len();
+        let _current_event_count = events.len();
         
         // Check if there are events starting soon (within next 2 hours)
         let now = Utc::now().timestamp();
@@ -1378,7 +1378,7 @@ Focus on THE most important insight. Be specific to THIS calendar, not generic. 
             // Check if this context source existed before and has similar characteristics
             if previous_state.context_source_states.contains_key(&context.source_id) {
                 match &context.content {
-                    ContextContent::Calendar(cal_ctx) => {
+                    ContextContent::Calendar(_cal_ctx) => {
                         // Calendar context is similar if event count and conflicts are similar
                         // (Minor changes like descriptions don't affect semantic meaning)
                         similar_sources += 1;

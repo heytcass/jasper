@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use tracing::{info, warn, debug};
+use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;

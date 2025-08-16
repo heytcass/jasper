@@ -2,7 +2,9 @@ use anyhow::{Result, Context};
 use clap::{Parser, Subcommand};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+#[cfg(feature = "new-config")]
 use std::sync::Arc;
+#[cfg(feature = "new-config")]
 use parking_lot::RwLock;
 
 mod config;

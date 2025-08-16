@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::process::Command;
