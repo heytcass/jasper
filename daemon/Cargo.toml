@@ -38,12 +38,7 @@ arc-swap = "1.7"
 notify-rust = { version = "4.11", default-features = false, features = ["dbus"] }
 
 [features]
-default = ["legacy-commands", "legacy-config"]
-legacy-commands = []
-legacy-config = []
-new-commands = []
-new-config = []
-production = ["new-commands", "new-config"]
+default = []
 
 [dev-dependencies]
 # Integration testing dependencies

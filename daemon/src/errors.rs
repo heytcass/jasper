@@ -286,3 +286,12 @@ impl From<reqwest::Error> for JasperError {
         }
     }
 }
+
+/// Convert zbus::Error to JasperError
+impl From<zbus::Error> for JasperError {
+    fn from(error: zbus::Error) -> Self {
+        Self::Internal {
+            message: format!("D-Bus error: {}", error),
+        }
+    }
+}

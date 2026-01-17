@@ -15,7 +15,6 @@ use uuid::Uuid;
 
 use crate::database::Event;
 use crate::http_utils::{handle_google_api_response, handle_oauth2_response_with_text, parse_json_response};
-use crate::error_recovery::CircuitBreaker;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCalendarConfig {
@@ -91,7 +90,6 @@ pub struct GoogleCalendarService {
     config: GoogleCalendarConfig,
     token_file_path: PathBuf,
     http_client: reqwest::Client,
-    circuit_breaker: CircuitBreaker,
 }
 
 impl GoogleCalendarService {
@@ -102,8 +100,6 @@ impl GoogleCalendarService {
             config,
             token_file_path,
             http_client: reqwest::Client::new(),
-            // Circuit breaker: 5 failures over 2 minutes triggers the breaker
-            circuit_breaker: CircuitBreaker::new(5, std::time::Duration::from_secs(120)),
         }
     }
 

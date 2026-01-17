@@ -61,6 +61,35 @@ pub struct EnrichedEvent {
     pub calendar_info: Option<Calendar>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Insight {
+    pub id: i64,
+    pub emoji: String,
+    pub insight: String,
+    pub context_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextSnapshot {
+    pub id: i64,
+    pub insight_id: i64,
+    pub source: String,
+    pub snapshot_json: String,
+    pub significance_score: Option<f32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveFrontend {
+    pub id: String,
+    pub pid: Option<i32>,
+    pub started_at: DateTime<Utc>,
+    pub last_heartbeat: DateTime<Utc>,
+}
+
 impl DatabaseInner {
     pub async fn new(db_path: &PathBuf) -> JasperResult<Database> {
         // Ensure data directory exists
@@ -336,6 +365,70 @@ impl DatabaseInner {
         )?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_patterns_last_seen ON user_patterns(last_seen)",
+            [],
+        )?;
+
+        // Create insights table for the new simplified architecture
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS insights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                emoji TEXT NOT NULL,
+                insight TEXT NOT NULL,
+                context_hash TEXT,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                expires_at INTEGER,
+                is_active INTEGER DEFAULT 1
+            )",
+            [],
+        )?;
+
+        // Indexes for insights table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_insights_created_at ON insights(created_at)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_insights_active ON insights(is_active)",
+            [],
+        )?;
+
+        // Create context_snapshots table to track what triggered each insight
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS context_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                insight_id INTEGER REFERENCES insights(id) ON DELETE CASCADE,
+                source TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                significance_score REAL,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )",
+            [],
+        )?;
+
+        // Indexes for context_snapshots table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_context_snapshots_insight_id ON context_snapshots(insight_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_context_snapshots_source ON context_snapshots(source)",
+            [],
+        )?;
+
+        // Create active_frontends table to track which frontends are running
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS active_frontends (
+                id TEXT PRIMARY KEY,
+                pid INTEGER,
+                started_at INTEGER DEFAULT (strftime('%s', 'now')),
+                last_heartbeat INTEGER DEFAULT (strftime('%s', 'now'))
+            )",
+            [],
+        )?;
+
+        // Index for active_frontends table
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_frontends_heartbeat ON active_frontends(last_heartbeat)",
             [],
         )?;
         
@@ -761,6 +854,160 @@ impl DatabaseInner {
             id if id.contains("holiday") => "#9C27B0", // Purple
             _ => "#757575", // Grey for unknown
         }
+    }
+
+    /// Store a new insight from AI analysis
+    pub fn store_insight(&self, emoji: &str, insight: &str, context_hash: Option<&str>) -> JasperResult<i64> {
+        self.with_connection_retry(|conn| {
+            conn.execute(
+                "INSERT INTO insights (emoji, insight, context_hash) VALUES (?, ?, ?)",
+                params![emoji, insight, context_hash],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    /// Get the latest active insight
+    pub fn get_latest_insight(&self) -> JasperResult<Option<Insight>> {
+        self.with_connection_retry(|conn| {
+            let insight = conn.query_row(
+                "SELECT id, emoji, insight, context_hash, created_at, expires_at, is_active
+                 FROM insights 
+                 WHERE is_active = 1 
+                 ORDER BY created_at DESC 
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok(Insight {
+                        id: row.get(0)?,
+                        emoji: row.get(1)?,
+                        insight: row.get(2)?,
+                        context_hash: row.get(3)?,
+                        created_at: DateTime::from_timestamp(row.get::<_, i64>(4)?, 0).unwrap_or_default(),
+                        expires_at: row.get::<_, Option<i64>>(5)?
+                            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
+                        is_active: row.get::<_, i64>(6)? != 0,
+                    })
+                }
+            ).optional()?;
+            Ok(insight)
+        })
+    }
+
+    /// Get insight by ID
+    pub fn get_insight_by_id(&self, insight_id: i64) -> JasperResult<Option<Insight>> {
+        self.with_connection_retry(|conn| {
+            let insight = conn.query_row(
+                "SELECT id, emoji, insight, context_hash, created_at, expires_at, is_active
+                 FROM insights 
+                 WHERE id = ?",
+                params![insight_id],
+                |row| {
+                    Ok(Insight {
+                        id: row.get(0)?,
+                        emoji: row.get(1)?,
+                        insight: row.get(2)?,
+                        context_hash: row.get(3)?,
+                        created_at: DateTime::from_timestamp(row.get::<_, i64>(4)?, 0).unwrap_or_default(),
+                        expires_at: row.get::<_, Option<i64>>(5)?
+                            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
+                        is_active: row.get::<_, i64>(6)? != 0,
+                    })
+                }
+            ).optional()?;
+            Ok(insight)
+        })
+    }
+
+    /// Store context snapshot that triggered an insight
+    pub fn store_context_snapshot(&self, insight_id: i64, source: &str, snapshot_json: &str, significance_score: Option<f32>) -> JasperResult<i64> {
+        self.with_connection_retry(|conn| {
+            conn.execute(
+                "INSERT INTO context_snapshots (insight_id, source, snapshot_json, significance_score) VALUES (?, ?, ?, ?)",
+                params![insight_id, source, snapshot_json, significance_score],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    /// Register a frontend as active
+    pub fn register_frontend(&self, frontend_id: &str, pid: Option<i32>) -> JasperResult<()> {
+        self.with_connection_retry(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO active_frontends (id, pid) VALUES (?, ?)",
+                params![frontend_id, pid],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Unregister a frontend 
+    pub fn unregister_frontend(&self, frontend_id: &str) -> JasperResult<()> {
+        self.with_connection_retry(|conn| {
+            conn.execute(
+                "DELETE FROM active_frontends WHERE id = ?",
+                params![frontend_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Update frontend heartbeat
+    pub fn update_frontend_heartbeat(&self, frontend_id: &str) -> JasperResult<()> {
+        self.with_connection_retry(|conn| {
+            conn.execute(
+                "UPDATE active_frontends SET last_heartbeat = strftime('%s', 'now') WHERE id = ?",
+                params![frontend_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Get list of active frontends
+    pub fn get_active_frontends(&self) -> JasperResult<Vec<ActiveFrontend>> {
+        self.with_connection_retry(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, pid, started_at, last_heartbeat FROM active_frontends"
+            )?;
+            
+            let frontends = stmt.query_map([], |row| {
+                Ok(ActiveFrontend {
+                    id: row.get(0)?,
+                    pid: row.get(1)?,
+                    started_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0).unwrap_or_default(),
+                    last_heartbeat: DateTime::from_timestamp(row.get::<_, i64>(3)?, 0).unwrap_or_default(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+            
+            Ok(frontends)
+        })
+    }
+
+    /// Clean up expired frontends (no heartbeat for > 60 seconds)
+    pub fn cleanup_expired_frontends(&self) -> JasperResult<usize> {
+        self.with_connection_retry(|conn| {
+            let count = conn.execute(
+                "DELETE FROM active_frontends WHERE last_heartbeat < strftime('%s', 'now') - 60",
+                [],
+            )?;
+            Ok(count)
+        })
+    }
+
+    /// Check if any frontends are currently active
+    pub fn has_active_frontends(&self) -> JasperResult<bool> {
+        // Clean up expired frontends first
+        self.cleanup_expired_frontends()?;
+        
+        self.with_connection_retry(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM active_frontends",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count > 0)
+        })
     }
 }
 
