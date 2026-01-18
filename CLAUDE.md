@@ -1,6 +1,39 @@
 # Claude Code Instructions for Jasper Development
 
-## ⚠️ CRITICAL: Use Development Mode
+## 🖥️ Platform Detection
+
+**IMPORTANT**: This project supports both NixOS and Ubuntu/Debian systems with different workflows.
+
+### Ubuntu/Debian Systems
+
+If you're on Ubuntu 25.11 or other Debian-based systems:
+
+1. **Read the Ubuntu guide**: `docs/UBUNTU_SETUP.md`
+2. **Install dependencies**: `./ubuntu/install-deps.sh`
+3. **Use the Makefile**: `make build`, `sudo make install`
+4. **Development helper**: `./ubuntu/dev-helper.sh` for development workflow
+5. **No Nix required**: Use standard cargo/make commands
+
+**Ubuntu Development Workflow**:
+```bash
+# Quick development cycle
+./ubuntu/dev-helper.sh quick           # Build + install + restart
+
+# Individual commands
+./ubuntu/dev-helper.sh build-debug     # Build debug binary
+./ubuntu/dev-helper.sh install-dev     # Install to /usr/local/bin
+./ubuntu/dev-helper.sh restart         # Restart daemon
+./ubuntu/dev-helper.sh logs            # Watch logs
+./ubuntu/dev-helper.sh status          # Check status
+```
+
+See `ubuntu/README.md` and `docs/UBUNTU_SETUP.md` for complete Ubuntu documentation.
+
+---
+
+### NixOS Systems
+
+## ⚠️ CRITICAL: Use Development Mode (NixOS Only)
 
 This project requires a special development workflow to avoid slow NixOS rebuilds.
 
