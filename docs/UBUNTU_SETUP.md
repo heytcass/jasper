@@ -175,7 +175,7 @@ systemctl --user start jasper-companion
 systemctl --user status jasper-companion
 
 # View logs
-journalctl --user -u jasper-companion-daemon -f
+journalctl --user -u jasper-companion -f
 ```
 
 ### 6. Install Frontend (Choose One)
@@ -320,7 +320,7 @@ sudo make install
 systemctl --user restart jasper-companion
 
 # Watch logs
-journalctl --user -u jasper-companion-daemon -f
+journalctl --user -u jasper-companion -f
 
 # For extension development
 make install-extension
@@ -355,7 +355,7 @@ journalctl --user -xe | grep -i jasper
 systemctl --user status jasper-companion
 
 # View detailed logs
-journalctl --user -u jasper-companion-daemon -n 50
+journalctl --user -u jasper-companion -n 50
 
 # Common issues:
 # - Missing API key: jasper-companion-daemon set-api-key <key>

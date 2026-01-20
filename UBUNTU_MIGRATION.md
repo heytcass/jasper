@@ -51,7 +51,7 @@ Ubuntu uses standard Linux paths:
 | D-Bus service | `/usr/share/dbus-1/services/org.jasper.Daemon.service` |
 | GNOME extension | `~/.local/share/gnome-shell/extensions/jasper-companion@heytcass.github/` |
 | Configuration | `~/.config/jasper-companion/config.toml` |
-| Database | `~/.local/share/jasper-companion/jasper.db` |
+| Database | `~/.local/share/jasper-companion/app_data.db` |
 
 ### 5. Build Test Results
 
