@@ -6,7 +6,7 @@ Wants=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@BINDIR@/jasper-companion start
+ExecStart=@BINDIR@/jasper-companion-daemon start
 Restart=always
 RestartSec=5
 Environment="RUST_LOG=info"

@@ -95,9 +95,9 @@ make build
 sudo make install
 
 # This installs:
-# - /usr/local/bin/jasper-companion-daemon-daemon (daemon binary)
+# - /usr/local/bin/jasper-companion-daemon (daemon binary)
 # - /usr/share/dbus-1/services/org.jasper.Daemon.service (D-Bus service)
-# - /etc/systemd/user/jasper-companion-daemon.service (systemd user service)
+# - /etc/systemd/user/jasper-companion.service (systemd user service)
 ```
 
 ### 4. Configure Jasper
@@ -116,7 +116,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ```bash
 # Edit configuration file
-nano ~/.config/jasper-companion-daemon/config.toml
+nano ~/.config/jasper-companion/config.toml
 ```
 
 Add your Google Calendar credentials:
@@ -135,7 +135,7 @@ jasper-companion-daemon auth google login
 
 #### Configuration File Reference
 
-Default location: `~/.config/jasper-companion-daemon/config.toml`
+Default location: `~/.config/jasper-companion/config.toml`
 
 ```toml
 [general]
@@ -208,7 +208,7 @@ Add to your `~/.config/waybar/config`:
   "modules-right": ["custom/jasper", "..."],
 
   "custom/jasper": {
-    "exec": "/usr/local/bin/jasper-companion-daemon-daemon waybar",
+    "exec": "/usr/local/bin/jasper-companion-daemon waybar",
     "return-type": "json",
     "interval": 900,
     "signal": 8,
@@ -359,7 +359,7 @@ journalctl --user -u jasper-companion-daemon -n 50
 
 # Common issues:
 # - Missing API key: jasper-companion-daemon set-api-key <key>
-# - Configuration error: check ~/.config/jasper-companion-daemon/config.toml
+# - Configuration error: check ~/.config/jasper-companion/config.toml
 # - D-Bus issues: check dbus-daemon is running
 ```
 
@@ -374,7 +374,7 @@ gnome-extensions info jasper-companion@heytcass.github
 gnome-extensions enable jasper-companion@heytcass.github
 
 # Check installation location
-ls -la ~/.local/share/gnome-shell/extensions/jasper-companion-daemon@heytcass.github/
+ls -la ~/.local/share/gnome-shell/extensions/jasper-companion@heytcass.github/
 
 # View extension errors
 journalctl -f /usr/bin/gnome-shell
@@ -384,7 +384,7 @@ journalctl -f /usr/bin/gnome-shell
 
 ```bash
 # Test JSON output manually
-/usr/local/bin/jasper-companion-daemon-daemon waybar
+/usr/local/bin/jasper-companion-daemon waybar
 
 # Check Waybar logs
 journalctl --user -u waybar -f
@@ -415,13 +415,13 @@ dbus-monitor --session "interface='org.jasper.Daemon1'"
 
 ```bash
 # Database location
-ls -lh ~/.local/share/jasper-companion-daemon/jasper.db
+ls -lh ~/.local/share/jasper-companion/app_data.db
 
 # Check database integrity
-sqlite3 ~/.local/share/jasper-companion-daemon/jasper.db "PRAGMA integrity_check;"
+sqlite3 ~/.local/share/jasper-companion/app_data.db "PRAGMA integrity_check;"
 
 # Reset database (WARNING: deletes all data)
-rm ~/.local/share/jasper-companion-daemon/jasper.db
+rm ~/.local/share/jasper-companion/app_data.db
 systemctl --user restart jasper-companion
 ```
 
@@ -440,7 +440,7 @@ make uninstall-extension
 
 # Remove user data (optional)
 rm -rf ~/.config/jasper-companion-daemon
-rm -rf ~/.local/share/jasper-companion-daemon
+rm -rf ~/.local/share/jasper-companion
 
 # Remove Rust toolchain (optional)
 rustup self uninstall
@@ -454,11 +454,11 @@ rustup self uninstall
 |-----------|----------|
 | Daemon binary | `/usr/local/bin/jasper-companion-daemon` |
 | D-Bus service | `/usr/share/dbus-1/services/org.jasper.Daemon.service` |
-| systemd service | `/etc/systemd/user/jasper-companion-daemon.service` |
-| GNOME extension | `~/.local/share/gnome-shell/extensions/jasper-companion-daemon@heytcass.github/` |
-| Configuration | `~/.config/jasper-companion-daemon/config.toml` |
-| Database | `~/.local/share/jasper-companion-daemon/jasper.db` |
-| Secrets | `~/.config/jasper-companion-daemon/encrypted_secrets.age` |
+| systemd service | `/etc/systemd/user/jasper-companion.service` |
+| GNOME extension | `~/.local/share/gnome-shell/extensions/jasper-companion@heytcass.github/` |
+| Configuration | `~/.config/jasper-companion/config.toml` |
+| Database | `~/.local/share/jasper-companion/app_data.db` |
+| Secrets | `~/.config/jasper-companion/encrypted_secrets.age` |
 | Logs | `journalctl --user -u jasper-companion` |
 
 ### D-Bus Interface
@@ -488,7 +488,7 @@ On NixOS, Jasper used:
 On Ubuntu:
 - Standard `make` build system
 - Manual systemd service management
-- Configuration via `~/.config/jasper-companion-daemon/config.toml`
+- Configuration via `~/.config/jasper-companion/config.toml`
 - Manual frontend selection (GNOME or Waybar)
 - Separate installation steps
 

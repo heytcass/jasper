@@ -1,4 +1,4 @@
 [D-Bus Service]
 Name=org.jasper.Daemon
-Exec=@BINDIR@/jasper-companion start
+Exec=@BINDIR@/jasper-companion-daemon start
 SystemdService=jasper-companion.service

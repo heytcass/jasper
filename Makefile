@@ -84,16 +84,12 @@ install: build
 	# Install D-Bus service file
 	@echo "Installing D-Bus service file..."
 	install -d $(DBUS_SERVICES_DIR)
-	sed 's|@BINDIR@|$(BINDIR)|g' ubuntu/org.jasper.Daemon.service.in > /tmp/org.jasper.Daemon.service
-	install -D -m 644 /tmp/org.jasper.Daemon.service $(DBUS_SERVICES_DIR)/org.jasper.Daemon.service
-	rm /tmp/org.jasper.Daemon.service
+	sed 's|@BINDIR@|$(BINDIR)|g' ubuntu/org.jasper.Daemon.service.in | install -D -m 644 /dev/stdin $(DBUS_SERVICES_DIR)/org.jasper.Daemon.service
 
 	# Install systemd user service
 	@echo "Installing systemd user service..."
 	install -d $(SYSTEMD_USER_DIR)
-	sed 's|@BINDIR@|$(BINDIR)|g' ubuntu/jasper-companion.service.in > /tmp/jasper-companion.service
-	install -D -m 644 /tmp/jasper-companion.service $(SYSTEMD_USER_DIR)/jasper-companion.service
-	rm /tmp/jasper-companion.service
+	sed 's|@BINDIR@|$(BINDIR)|g' ubuntu/jasper-companion.service.in | install -D -m 644 /dev/stdin $(SYSTEMD_USER_DIR)/jasper-companion.service
 
 	@echo ""
 	@echo "Installation complete! ✓"
