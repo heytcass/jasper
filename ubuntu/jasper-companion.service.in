@@ -1,0 +1,22 @@
+[Unit]
+Description=Jasper Companion AI Assistant
+Documentation=https://github.com/heytcass/jasper
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/jasper-companion-daemon start
+Restart=always
+RestartSec=5
+Environment="RUST_LOG=info"
+
+# Allow access to user's D-Bus session
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -79,6 +79,16 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 
 ## 🚀 Quick Start
 
+### Platform Support
+
+Jasper supports multiple platforms:
+
+- **Ubuntu/Debian**: Full support with standard build tools → See **[docs/UBUNTU_SETUP.md](docs/UBUNTU_SETUP.md)**
+- **NixOS**: Declarative configuration with Nix flakes → See installation instructions below
+- **Other Linux**: Should work with manual dependency installation
+
+**For Ubuntu 25.11 users**: We recommend following the **[Ubuntu Setup Guide](docs/UBUNTU_SETUP.md)** for the smoothest installation experience.
+
 ### Prerequisites
 - **Rust**: Latest stable version
 - **Claude API Key**: From [Anthropic Console](https://console.anthropic.com)
@@ -86,6 +96,30 @@ Jasper is a proactive, intelligent companion for your desktop that leverages Cla
 - **GNOME Shell** (for extension) or **Waybar** (for status bar integration)
 
 ### Installation
+
+#### Ubuntu/Debian Quick Start
+
+```bash
+# 1. Install dependencies
+./ubuntu/install-deps.sh
+
+# 2. Build and install
+make build
+sudo make install
+
+# 3. Configure
+jasper-companion-daemon set-api-key <your-anthropic-api-key>
+
+# 4. Start
+systemctl --user enable --now jasper-companion
+
+# 5. Install GNOME extension (optional)
+make install-extension
+```
+
+For complete Ubuntu setup instructions, see **[docs/UBUNTU_SETUP.md](docs/UBUNTU_SETUP.md)**.
+
+#### NixOS / Manual Installation
 
 1. **Clone and build**:
    ```bash
@@ -263,7 +297,7 @@ Jasper includes full NixOS module support:
 # configuration.nix or home.nix
 {
   programs.waybar.jasper.enable = true;
-  services.jasper-companion = {
+  services.jasper-companion-daemon = {
     enable = true;
     user = "youruser";
     configFile = ./jasper-config.toml;
