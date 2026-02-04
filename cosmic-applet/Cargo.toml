@@ -1,0 +1,32 @@
+[package]
+name = "jasper-cosmic-applet"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "COSMIC panel applet for Jasper AI Companion"
+
+[[bin]]
+name = "jasper-cosmic-applet"
+path = "src/main.rs"
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", rev = "3e78eb238159d90956e85e95e868164671b649f6", features = [
+    "applet",
+    "applet-token",
+    "dbus-config",
+    "tokio",
+    "wayland",
+    "winit",
+] }
+
+tokio = { workspace = true }
+zbus = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures-util = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

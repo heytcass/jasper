@@ -13,12 +13,14 @@ let
   
   # Desktop environment detection helpers
   hasGnome = config.services.xserver.desktopManager.gnome.enable or false;
+  hasCosmic = config.services.desktopManager.cosmic.enable or false;
   hasKde = config.services.xserver.desktopManager.plasma5.enable or false;
   hasWaybar = config.programs.waybar.enable or false;
-  
+
   # Generate frontend list based on detection if auto-detect is enabled
-  detectedFrontends = 
+  detectedFrontends =
     optionals hasGnome [ "gnome" ] ++
+    optionals hasCosmic [ "cosmic" ] ++
     optionals hasKde [ "kde" ] ++
     optionals hasWaybar [ "waybar" ];
   
@@ -74,7 +76,7 @@ in
     };
     
     forceEnableFrontends = mkOption {
-      type = types.listOf (types.enum [ "gnome" "waybar" "kde" "terminal" ]);
+      type = types.listOf (types.enum [ "gnome" "cosmic" "waybar" "kde" "terminal" ]);
       default = [];
       example = [ "gnome" "waybar" ];
       description = lib.mdDoc ''
@@ -82,6 +84,7 @@ in
         Available options:
         
         - `gnome`: GNOME Shell extension with panel integration
+        - `cosmic`: COSMIC panel applet
         - `waybar`: JSON output for Waybar status bar
         - `kde`: KDE Plasma integration (planned)
         - `terminal`: Terminal-only interface
@@ -238,11 +241,11 @@ in
         message = "services.jasperCompanion.user must be set to your main user account";
       }
       {
-        assertion = cfg.autoDetectDesktop -> (hasGnome || hasWaybar || cfg.forceEnableFrontends != []);
+        assertion = cfg.autoDetectDesktop -> (hasGnome || hasCosmic || hasWaybar || cfg.forceEnableFrontends != []);
         message = ''
           Jasper auto-detection is enabled but no supported desktop environments were detected.
           Either:
-          1. Enable a supported desktop (GNOME, Waybar)
+          1. Enable a supported desktop (GNOME, COSMIC, Waybar)
           2. Set forceEnableFrontends to specify manual frontends
           3. Disable autoDetectDesktop for terminal-only usage
         '';

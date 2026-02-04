@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "daemon",
+    "cosmic-applet",
 ]
 resolver = "2"
 
