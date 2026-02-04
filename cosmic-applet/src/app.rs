@@ -8,7 +8,7 @@ use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
 use futures_util::SinkExt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 const FRONTEND_ID: &str = "cosmic-applet";
 
@@ -106,27 +106,21 @@ impl cosmic::Application for JasperApplet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        if self.config.show_text_in_panel {
+        let label = if self.config.show_text_in_panel {
             let max = self.config.panel_text_max_chars as usize;
             let display_text = if self.current_text.len() > max {
                 format!("{}...", &self.current_text[..max.saturating_sub(3)])
             } else {
                 self.current_text.clone()
             };
-            let label = format!("{} {}", self.current_emoji, display_text);
-            self.core
-                .applet
-                .text_button(label)
-                .on_press(Message::TogglePopup)
-                .into()
+            format!("{} {}", self.current_emoji, display_text)
         } else {
-            // Emoji-only panel button
-            self.core
-                .applet
-                .text_button(self.current_emoji.clone())
-                .on_press(Message::TogglePopup)
-                .into()
-        }
+            self.current_emoji.clone()
+        };
+        self.core
+            .applet
+            .text_button(widget::text::body(label), Message::TogglePopup)
+            .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
