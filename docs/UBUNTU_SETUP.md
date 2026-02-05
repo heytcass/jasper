@@ -145,7 +145,7 @@ timezone = "America/New_York"
 
 [ai]
 provider = "anthropic"
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-4-5-20250514"
 api_key = ""  # or use ANTHROPIC_API_KEY env var
 
 [google_calendar]

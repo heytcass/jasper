@@ -233,7 +233,7 @@ timezone = "America/New_York"  # Your timezone
 
 [ai]
 provider = "anthropic"
-model = "claude-sonnet-4-20250514" 
+model = "claude-sonnet-4-5-20250514"
 api_key = ""                   # Set via CLI command
 
 [google_calendar]
