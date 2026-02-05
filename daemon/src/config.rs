@@ -185,7 +185,7 @@ impl Default for Config {
             },
             ai: AiConfig {
                 provider: "anthropic".to_string(),
-                model: "claude-sonnet-4-20250514".to_string(),
+                model: "claude-sonnet-4-5".to_string(),
                 max_tokens: 2000,
                 temperature: 0.7,
                 api_key: None, // Falls back to ANTHROPIC_API_KEY environment variable

@@ -5,8 +5,35 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::fs as async_fs;
 use tracing::{debug, info, warn};
+
+/// Pre-compiled regexes used across obsidian parsing (compiled once, reused)
+struct ObsidianRegexes {
+    frontmatter: Regex,
+    task: Regex,
+    item: Regex,
+    meeting: Regex,
+    call: Regex,
+    focus_patterns: Vec<Regex>,
+}
+
+fn obsidian_regexes() -> &'static ObsidianRegexes {
+    static REGEXES: OnceLock<ObsidianRegexes> = OnceLock::new();
+    REGEXES.get_or_init(|| ObsidianRegexes {
+        frontmatter: Regex::new(r"^---\n(.*?)\n---\n(.*)$").unwrap(),
+        task: Regex::new(r"^\s*- \[([ x])\] (.+)$").unwrap(),
+        item: Regex::new(r"^\s*[-*]\s+(.+)$").unwrap(),
+        meeting: Regex::new(r"(?i)meeting\s+with\s+([^.]+)").unwrap(),
+        call: Regex::new(r"(?i)call\s+with\s+([^.]+)").unwrap(),
+        focus_patterns: vec![
+            Regex::new(r"## Focus(?:\s+Areas?)?\s*\n(.*?)(?:\n##|$)").unwrap(),
+            Regex::new(r"## Today's Focus\s*\n(.*?)(?:\n##|$)").unwrap(),
+            Regex::new(r"## Priorities\s*\n(.*?)(?:\n##|$)").unwrap(),
+        ],
+    })
+}
 
 use super::{
     ContextSource, ContextData, ContextDataType, ContextContent, NotesContext,
@@ -100,9 +127,9 @@ impl ObsidianVaultSource {
     
     /// Parse frontmatter from a markdown file
     fn parse_frontmatter(content: &str) -> Result<(Option<FrontMatter>, String)> {
-        let frontmatter_regex = Regex::new(r"^---\n(.*?)\n---\n(.*)$")?;
-        
-        if let Some(captures) = frontmatter_regex.captures(content) {
+        let re = &obsidian_regexes().frontmatter;
+
+        if let Some(captures) = re.captures(content) {
             let yaml_content = captures.get(1)
                 .ok_or_else(|| anyhow!("Failed to extract YAML content from frontmatter"))?
                 .as_str();
@@ -150,9 +177,8 @@ impl ObsidianVaultSource {
     /// Extract tasks from markdown content
     fn extract_tasks(content: &str, file_path: &Path) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
-        let task_regex = Regex::new(r"^\s*- \[([ x])\] (.+)$")
-            .map_err(|e| anyhow!("Failed to compile task regex: {}", e))?;
-        
+        let task_regex = &obsidian_regexes().task;
+
         for (line_num, line) in content.lines().enumerate() {
             if let Some(captures) = task_regex.captures(line) {
                 let is_completed = captures.get(1)
@@ -244,35 +270,24 @@ impl ObsidianVaultSource {
     /// Extract focus areas from content
     fn extract_focus_areas(&self, content: &str) -> Result<Vec<String>> {
         let mut focus_areas = Vec::new();
-        
-        // Look for common focus area patterns
-        let focus_patterns = vec![
-            r"## Focus(?:\s+Areas?)?\s*\n(.*?)(?:\n##|$)",
-            r"## Today's Focus\s*\n(.*?)(?:\n##|$)",
-            r"## Priorities\s*\n(.*?)(?:\n##|$)",
-        ];
-        
-        for pattern in focus_patterns {
-            if let Ok(regex) = Regex::new(pattern) {
-                if let Some(captures) = regex.captures(content) {
-                    let focus_text = captures.get(1)
-                        .ok_or_else(|| anyhow!("Failed to extract focus text from line"))?
-                        .as_str();
-                    // Extract list items
-                    let item_regex = Regex::new(r"^\s*[-*]\s+(.+)$")
-                        .map_err(|e| anyhow!("Failed to compile item regex: {}", e))?;
-                    for line in focus_text.lines() {
-                        if let Some(item_captures) = item_regex.captures(line) {
-                            let item = item_captures.get(1)
-                                .ok_or_else(|| anyhow!("Failed to extract item text from line"))?
-                                .as_str();
-                            focus_areas.push(item.to_string());
-                        }
+        let regexes = obsidian_regexes();
+
+        for regex in &regexes.focus_patterns {
+            if let Some(captures) = regex.captures(content) {
+                let focus_text = captures.get(1)
+                    .ok_or_else(|| anyhow!("Failed to extract focus text from line"))?
+                    .as_str();
+                for line in focus_text.lines() {
+                    if let Some(item_captures) = regexes.item.captures(line) {
+                        let item = item_captures.get(1)
+                            .ok_or_else(|| anyhow!("Failed to extract item text from line"))?
+                            .as_str();
+                        focus_areas.push(item.to_string());
                     }
                 }
             }
         }
-        
+
         Ok(focus_areas)
     }
     
@@ -406,54 +421,46 @@ impl ObsidianVaultSource {
         Ok(alerts)
     }
     
-    /// Get recent activities
-    async fn get_recent_activities(&self, start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Activity>> {
+    /// Get recent activities from already-fetched daily notes (avoids re-reading files)
+    fn extract_activities_from_notes(daily_notes: &[DailyNote]) -> Vec<Activity> {
         let mut activities = Vec::new();
-        
-        // For now, we'll extract activities from recent daily notes
-        let recent_daily_notes = self.get_daily_notes(start, Utc::now()).await?;
-        
-        for daily_note in recent_daily_notes {
-            // Extract meeting references and activities from daily note content
-            let meeting_regex = Regex::new(r"(?i)meeting\s+with\s+([^.]+)")
-                .map_err(|e| anyhow!("Failed to compile meeting regex: {}", e))?;
-            let call_regex = Regex::new(r"(?i)call\s+with\s+([^.]+)")
-                .map_err(|e| anyhow!("Failed to compile call regex: {}", e))?;
-            
+        let regexes = obsidian_regexes();
+
+        for daily_note in daily_notes {
             for (line_num, line) in daily_note.content.lines().enumerate() {
-                if let Some(captures) = meeting_regex.captures(line) {
+                if let Some(captures) = regexes.meeting.captures(line) {
                     if let Some(person_match) = captures.get(1) {
                         let person = person_match.as_str();
-                    activities.push(Activity {
-                        id: format!("{}:meeting:{}", daily_note.date.format("%Y-%m-%d"), line_num),
-                        title: format!("Meeting with {}", person),
-                        description: Some(line.to_string()),
-                        timestamp: daily_note.date,
-                        activity_type: ActivityType::Meeting,
-                        duration: None,
-                        outcome: None,
-                    });
+                        activities.push(Activity {
+                            id: format!("{}:meeting:{}", daily_note.date.format("%Y-%m-%d"), line_num),
+                            title: format!("Meeting with {}", person),
+                            description: Some(line.to_string()),
+                            timestamp: daily_note.date,
+                            activity_type: ActivityType::Meeting,
+                            duration: None,
+                            outcome: None,
+                        });
                     }
                 }
-                
-                if let Some(captures) = call_regex.captures(line) {
+
+                if let Some(captures) = regexes.call.captures(line) {
                     if let Some(person_match) = captures.get(1) {
                         let person = person_match.as_str();
-                    activities.push(Activity {
-                        id: format!("{}:call:{}", daily_note.date.format("%Y-%m-%d"), line_num),
-                        title: format!("Call with {}", person),
-                        description: Some(line.to_string()),
-                        timestamp: daily_note.date,
-                        activity_type: ActivityType::Call,
-                        duration: None,
-                        outcome: None,
-                    });
+                        activities.push(Activity {
+                            id: format!("{}:call:{}", daily_note.date.format("%Y-%m-%d"), line_num),
+                            title: format!("Call with {}", person),
+                            description: Some(line.to_string()),
+                            timestamp: daily_note.date,
+                            activity_type: ActivityType::Call,
+                            duration: None,
+                            outcome: None,
+                        });
                     }
                 }
             }
         }
-        
-        Ok(activities)
+
+        activities
     }
 }
 
@@ -477,7 +484,7 @@ impl ContextSource for ObsidianVaultSource {
         let daily_notes = self.get_daily_notes(start, end).await?;
         let active_projects = self.get_active_projects().await?;
         let relationship_alerts = self.get_relationship_alerts().await?;
-        let recent_activities = self.get_recent_activities(start, end).await?;
+        let recent_activities = Self::extract_activities_from_notes(&daily_notes);
         
         // Extract all tasks from daily notes and projects
         let mut all_tasks = Vec::new();

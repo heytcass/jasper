@@ -6,7 +6,6 @@ use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
-use reqwest;
 
 use super::{
     ContextSource, ContextData, ContextDataType, ContextContent, TaskContext, Task, TaskStatus
@@ -17,6 +16,7 @@ pub struct TasksContextSource {
     source_type: TaskSourceType,
     config: TasksConfig,
     enabled: bool,
+    client: reqwest::Client,
 }
 
 /// Types of task sources
@@ -110,6 +110,7 @@ impl TasksContextSource {
             source_type,
             config,
             enabled,
+            client: reqwest::Client::new(),
         }
     }
     
@@ -145,11 +146,9 @@ impl TasksContextSource {
             .ok_or_else(|| anyhow!("Todoist API key not configured"))?;
         
         info!("Fetching tasks from Todoist API");
-        
-        let client = reqwest::Client::new();
-        
+
         // First, get projects for context
-        let projects_response = client
+        let projects_response = self.client
             .get("https://api.todoist.com/rest/v2/projects")
             .header("Authorization", format!("Bearer {}", api_key))
             .send()
@@ -165,7 +164,7 @@ impl TasksContextSource {
             .collect();
         
         // Then get tasks
-        let tasks_response = client
+        let tasks_response = self.client
             .get("https://api.todoist.com/rest/v2/tasks")
             .header("Authorization", format!("Bearer {}", api_key))
             .send()
@@ -509,22 +508,21 @@ impl TasksContextSource {
     
     /// Extract due date from task title using common patterns
     fn extract_due_date_from_title(&self, title: &str) -> Option<DateTime<Utc>> {
-        // Look for patterns like:
-        // - "due 2024-07-17"
-        // - "by July 17"
-        // - "deadline: 2024-07-17"
-        // - "📅 2024-07-17"
-        
-        // Simple date pattern matching (YYYY-MM-DD)
-        if let Some(date_match) = title.find("2024-") {
-            let date_str = &title[date_match..date_match + 10];
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        // Look for any YYYY-MM-DD pattern anywhere in the title
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static DATE_RE: OnceLock<Regex> = OnceLock::new();
+        let date_re = DATE_RE.get_or_init(|| Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap());
+
+        if let Some(m) = date_re.find(title) {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(m.as_str(), "%Y-%m-%d") {
                 return Some(date.and_hms_opt(23, 59, 59).unwrap().and_utc());
             }
         }
-        
+
         // Look for "due:" or "deadline:" followed by date
-        for prefix in &["due:", "deadline:", "by ", "📅 "] {
+        for prefix in &["due:", "deadline:", "by ", "\u{1F4C5} "] {
             if let Some(pos) = title.to_lowercase().find(prefix) {
                 let after_prefix = &title[pos + prefix.len()..];
                 if let Some(date_str) = after_prefix.split_whitespace().next() {
@@ -534,7 +532,7 @@ impl TasksContextSource {
                 }
             }
         }
-        
+
         None
     }
 }

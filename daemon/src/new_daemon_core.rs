@@ -44,6 +44,7 @@ pub struct SimplifiedDaemonCore {
     context_manager: Arc<tokio::sync::RwLock<ContextSourceManager>>,
     api_manager: ApiManager,
     config: Arc<parking_lot::RwLock<Config>>,
+    http_client: reqwest::Client,
 
     // Configuration
     check_interval: Duration,
@@ -68,6 +69,7 @@ impl SimplifiedDaemonCore {
             context_manager: Arc::new(tokio::sync::RwLock::new(context_manager)),
             api_manager,
             config,
+            http_client: reqwest::Client::new(),
             check_interval: Duration::from_secs(60), // Check every minute
             is_running: Arc::new(RwLock::new(false)),
             signal_emitter: Arc::new(tokio::sync::RwLock::new(None)),
@@ -324,44 +326,43 @@ impl SimplifiedDaemonCore {
         })
     }
 
-    /// Call AI service for analysis
+    /// Call AI service for analysis, with automatic retry on transient failures
     async fn analyze_with_ai(&self, context: &ContextSnapshotSummary) -> JasperResult<AiInsight> {
         debug!("Calling AI service for context analysis");
-        
-        // Check if we can make an API call
-        match self.api_manager.can_make_api_call() {
-            Ok(()) => {
-                // Proceed with AI call
-                match self.call_anthropic_api(context).await {
-                    Ok(insight) => {
-                        self.api_manager.record_api_success();
-                        self.api_manager.record_api_call(500); // Estimate token usage
-                        Ok(insight)
-                    }
-                    Err(e) => {
-                        self.api_manager.record_api_failure(&e.to_string());
-                        Err(e)
-                    }
-                }
+
+        // Build the request body once so retries reuse it
+        let request_body = self.build_anthropic_request(context)?;
+
+        match self.api_manager.execute_with_retry(|| {
+            let body = request_body.clone();
+            async move { self.send_anthropic_request(&body).await.map_err(|e| anyhow::anyhow!("{}", e)) }
+        }).await {
+            Ok((insight, tokens_used)) => {
+                self.api_manager.record_api_call(tokens_used);
+                Ok(insight)
             }
-            Err(rate_limit_type) => {
-                warn!("API call blocked due to rate limiting: {:?}", rate_limit_type);
-                // Return a fallback insight
-                Ok(AiInsight {
-                    emoji: "⏳".to_string(),
-                    text: "Rate limited - check back later for fresh insights".to_string(),
-                    context_hash: context.context_hash.clone(),
-                })
+            Err(e) => {
+                // If rate-limited / circuit-broken, return fallback
+                if e.to_string().contains("Daily API limit")
+                    || e.to_string().contains("Circuit breaker")
+                {
+                    warn!("API call blocked: {}", e);
+                    Ok(AiInsight {
+                        emoji: "⏳".to_string(),
+                        text: "Rate limited - check back later for fresh insights".to_string(),
+                        context_hash: context.context_hash.clone(),
+                    })
+                } else {
+                    Err(crate::errors::JasperError::Internal { message: format!("AI analysis failed: {}", e) })
+                }
             }
         }
     }
 
-    /// Make actual API call to Anthropic Claude
-    async fn call_anthropic_api(&self, context: &ContextSnapshotSummary) -> JasperResult<AiInsight> {
-        // Build context summary for AI
+    /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
+    fn build_anthropic_request(&self, context: &ContextSnapshotSummary) -> JasperResult<serde_json::Value> {
         let mut context_summary = String::new();
-        
-        // Add calendar events
+
         if !context.calendar_events.is_empty() {
             context_summary.push_str("Calendar Events (next 24h):\n");
             for event in &context.calendar_events {
@@ -374,13 +375,11 @@ impl SimplifiedDaemonCore {
             }
             context_summary.push('\n');
         }
-        
-        // Add weather if available
+
         if let Some(weather) = &context.weather {
             context_summary.push_str(&format!("Weather: {} ({}°F)\n\n", weather.condition, weather.temperature));
         }
-        
-        // Add tasks if available
+
         if !context.tasks.is_empty() {
             context_summary.push_str("Upcoming Tasks:\n");
             for task in &context.tasks {
@@ -388,20 +387,16 @@ impl SimplifiedDaemonCore {
             }
             context_summary.push('\n');
         }
-        
+
         if context_summary.is_empty() {
             context_summary = "No significant context available.".to_string();
         }
-        
-        // Make API call to Anthropic
-        let client = reqwest::Client::new();
 
-        // Get API key from config (respects SOPS secrets and env var fallback)
-        let api_key = self.config.read().get_api_key()
-            .ok_or_else(|| crate::errors::JasperError::authentication("anthropic", "API key not configured. Set via config, SOPS secrets, or ANTHROPIC_API_KEY environment variable."))?;
-
-        // Get model and max_tokens from config
-        let (_, model, max_tokens, _) = self.config.read().get_api_config();
+        let (_, model, max_tokens) = {
+            let cfg = self.config.read();
+            let (_, model, max_tokens, _) = cfg.get_api_config();
+            ((), model, max_tokens)
+        };
 
         let prompt = format!(
             "You are Jasper, a helpful AI assistant. Analyze this context and provide a brief, actionable insight with an appropriate emoji.
@@ -415,25 +410,40 @@ Insight: [brief actionable insight in 1-2 sentences]",
             context_summary
         );
 
-        let request_body = serde_json::json!({
+        Ok(serde_json::json!({
             "model": model,
-            "max_tokens": max_tokens.min(200), // Cap at 200 for insights
+            "max_tokens": max_tokens.min(200),
             "messages": [{
                 "role": "user",
                 "content": prompt
-            }]
-        });
-        
-        let response = client
+            }],
+            "_context_hash": context.context_hash
+        }))
+    }
+
+    /// Send the pre-built request body to the Anthropic API. Returns insight and tokens used.
+    async fn send_anthropic_request(&self, request_body: &serde_json::Value) -> JasperResult<(AiInsight, u64)> {
+        let api_key = self.config.read().get_api_key()
+            .ok_or_else(|| crate::errors::JasperError::authentication("anthropic", "API key not configured. Set via config, SOPS secrets, or ANTHROPIC_API_KEY environment variable."))?;
+
+        // Strip our internal field before sending
+        let mut body = request_body.clone();
+        let context_hash = body.get("_context_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        body.as_object_mut().map(|o| o.remove("_context_hash"));
+
+        let response = self.http_client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .json(&request_body)
+            .json(&body)
             .send()
             .await
             .map_err(|e| crate::errors::JasperError::Internal { message: format!("API request failed: {}", e) })?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -441,10 +451,10 @@ Insight: [brief actionable insight in 1-2 sentences]",
                 message: format!("API call failed with status {}: {}", status, error_text)
             });
         }
-        
+
         let response_json: serde_json::Value = response.json().await
             .map_err(|e| crate::errors::JasperError::Internal { message: format!("Failed to parse response: {}", e) })?;
-        
+
         let content = response_json
             .get("content")
             .and_then(|c| c.as_array())
@@ -452,15 +462,23 @@ Insight: [brief actionable insight in 1-2 sentences]",
             .and_then(|item| item.get("text"))
             .and_then(|text| text.as_str())
             .ok_or_else(|| crate::errors::JasperError::Internal { message: "Invalid API response format".to_string() })?;
-        
-        // Parse the response
+
+        let tokens_used = response_json
+            .get("usage")
+            .map(|u| {
+                let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                input + output
+            })
+            .unwrap_or(0);
+
         let (emoji, insight) = self.parse_ai_response(content);
-        
-        Ok(AiInsight {
+
+        Ok((AiInsight {
             emoji,
             text: insight,
-            context_hash: context.context_hash.clone(),
-        })
+            context_hash,
+        }, tokens_used))
     }
     
     /// Parse AI response to extract emoji and insight
