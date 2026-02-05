@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod obsidian;
-pub mod calendar;
 pub mod weather;
 pub mod tasks;
 

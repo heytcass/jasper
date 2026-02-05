@@ -10,15 +10,13 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs", "time"
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 
-# Configuration and file watching
-notify = "6.0"
+# Configuration
 dirs = "5.0"
 
 # D-Bus
@@ -40,9 +38,6 @@ thiserror = "1.0"
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
-
-# Crypto for secure storage
-age = "0.10"
 
 # OAuth2 for Google Calendar authentication
 oauth2 = "4.4"

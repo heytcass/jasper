@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::sync::RwLock;
 use tracing::{info, debug};
 
 use super::{
@@ -147,6 +148,12 @@ struct City {
     sunset: i64,
 }
 
+/// Cached weather result with timestamp
+struct CachedWeather {
+    data: WeatherContext,
+    fetched_at: DateTime<Utc>,
+}
+
 /// Weather context source with OpenWeatherMap integration
 pub struct WeatherContextSource {
     api_key: Option<String>,
@@ -155,6 +162,7 @@ pub struct WeatherContextSource {
     client: Client,
     units: String, // "metric", "imperial", "kelvin"
     cache_duration_minutes: u32,
+    cache: RwLock<Option<CachedWeather>>,
 }
 
 impl WeatherContextSource {
@@ -168,9 +176,10 @@ impl WeatherContextSource {
             client: Client::new(),
             units: "imperial".to_string(), // Default to Fahrenheit for US
             cache_duration_minutes: 60, // Cache for 1 hour
+            cache: RwLock::new(None),
         }
     }
-    
+
     /// Create with custom configuration
     pub fn with_config(api_key: Option<String>, location: String, units: String, cache_duration_minutes: u32) -> Self {
         let enabled = api_key.is_some();
@@ -181,6 +190,7 @@ impl WeatherContextSource {
             client: Client::new(),
             units,
             cache_duration_minutes,
+            cache: RwLock::new(None),
         }
     }
     
@@ -334,12 +344,24 @@ impl WeatherContextSource {
         alerts
     }
     
-    /// Fetch weather data from OpenWeatherMap API
+    /// Fetch weather data from OpenWeatherMap API, with TTL-based caching
     async fn fetch_weather_data(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<WeatherContext> {
         if !self.enabled {
             return Err(anyhow!("Weather API is not enabled (no API key configured)"));
         }
-        
+
+        // Return cached data if still fresh
+        {
+            let cache = self.cache.read().await;
+            if let Some(ref cached) = *cache {
+                let age = Utc::now().signed_duration_since(cached.fetched_at);
+                if age.num_minutes() < self.cache_duration_minutes as i64 {
+                    debug!("Returning cached weather data ({} min old)", age.num_minutes());
+                    return Ok(cached.data.clone());
+                }
+            }
+        }
+
         // If API key is placeholder, return sample data for demonstration
         if self.api_key.as_ref().map_or(true, |key| key == "your_openweathermap_api_key_here") {
             info!("Using demo weather data (API key not configured)");
@@ -407,12 +429,23 @@ impl WeatherContextSource {
         let alerts = self.generate_weather_alerts(&current_weather, &forecast);
         
         info!("Weather data successfully fetched for {}", self.location);
-        
-        Ok(WeatherContext {
+
+        let result = WeatherContext {
             current_conditions,
             forecast,
             alerts,
-        })
+        };
+
+        // Store in cache
+        {
+            let mut cache = self.cache.write().await;
+            *cache = Some(CachedWeather {
+                data: result.clone(),
+                fetched_at: Utc::now(),
+            });
+        }
+
+        Ok(result)
     }
 }
 
