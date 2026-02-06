@@ -24,7 +24,6 @@ pub struct TasksContextSource {
 pub enum TaskSourceType {
     Todoist,
     LocalFile,
-    Obsidian, // This would be handled by the Obsidian source
 }
 
 /// Configuration for tasks
@@ -103,7 +102,6 @@ impl TasksContextSource {
         let enabled = match source_type {
             TaskSourceType::Todoist => config.api_key.is_some(),
             TaskSourceType::LocalFile => config.file_path.is_some(),
-            TaskSourceType::Obsidian => false, // Handled by Obsidian source
         };
         
         Self {
@@ -136,7 +134,6 @@ impl TasksContextSource {
         match self.source_type {
             TaskSourceType::Todoist => self.fetch_todoist_tasks().await,
             TaskSourceType::LocalFile => self.fetch_local_tasks().await,
-            TaskSourceType::Obsidian => self.fetch_obsidian_tasks().await,
         }
     }
     
@@ -367,174 +364,6 @@ impl TasksContextSource {
             _ => 5,  // Default
         }
     }
-    
-    /// Fetch tasks from Obsidian vault
-    async fn fetch_obsidian_tasks(&self) -> Result<Vec<Task>> {
-        let vault_path = self.config.file_path.as_ref()
-            .ok_or_else(|| anyhow!("Obsidian vault path not configured"))?;
-        
-        info!("Fetching tasks from Obsidian vault: {}", vault_path);
-        
-        let mut tasks = Vec::new();
-        self.scan_obsidian_vault_for_tasks(vault_path, &mut tasks).await?;
-        
-        info!("Found {} tasks in Obsidian vault", tasks.len());
-        Ok(tasks)
-    }
-    
-    /// Recursively scan Obsidian vault for tasks
-    async fn scan_obsidian_vault_for_tasks(&self, vault_path: &str, tasks: &mut Vec<Task>) -> Result<()> {
-        use std::path::Path;
-        use std::collections::VecDeque;
-        
-        let vault_dir = Path::new(vault_path);
-        if !vault_dir.exists() {
-            return Err(anyhow!("Obsidian vault directory does not exist: {}", vault_path));
-        }
-        
-        // Use iterative approach instead of recursion to avoid Send issues
-        let mut dirs_to_process = VecDeque::new();
-        dirs_to_process.push_back(vault_dir.to_path_buf());
-        
-        while let Some(dir) = dirs_to_process.pop_front() {
-            let mut entries = fs::read_dir(&dir).await?;
-            
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                
-                if path.is_dir() {
-                    // Skip hidden directories and .obsidian
-                    if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                        if dir_name.starts_with('.') || dir_name == ".obsidian" || dir_name == ".trash" {
-                            continue;
-                        }
-                    }
-                    
-                    // Add subdirectory to processing queue
-                    dirs_to_process.push_back(path);
-                } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    // Process markdown files
-                    if let Err(e) = self.extract_tasks_from_markdown_file(&path, tasks).await {
-                        warn!("Failed to extract tasks from file {:?}: {}", path, e);
-                    }
-                }
-                
-                // Limit total tasks
-                if tasks.len() >= self.config.max_tasks {
-                    break;
-                }
-            }
-            
-            // Limit total tasks
-            if tasks.len() >= self.config.max_tasks {
-                break;
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// Extract tasks from a single markdown file
-    async fn extract_tasks_from_markdown_file(&self, file_path: &Path, tasks: &mut Vec<Task>) -> Result<()> {
-        let content = fs::read_to_string(file_path).await?;
-        let file_name = file_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
-        
-        let mut task_id = 1;
-        for (line_num, line) in content.lines().enumerate() {
-            let line = line.trim();
-            
-            // Look for task patterns:
-            // - [ ] Task title
-            // - [x] Completed task
-            // - [!] High priority task
-            // - [>] Scheduled task
-            // - [?] Question/unclear task
-            if line.starts_with("- [") && line.len() > 4 {
-                let status_char = line.chars().nth(3).unwrap_or(' ');
-                let title = line[5..].trim();
-                
-                if title.is_empty() {
-                    continue;
-                }
-                
-                let status = match status_char {
-                    'x' | 'X' => TaskStatus::Completed,
-                    '!' => TaskStatus::InProgress,
-                    '>' => TaskStatus::Pending, // Scheduled
-                    '?' => TaskStatus::Blocked,  // Question/unclear
-                    ' ' => TaskStatus::Pending,
-                    _ => TaskStatus::Pending,
-                };
-                
-                let priority = match status_char {
-                    '!' => 8, // High priority
-                    '>' => 6, // Scheduled
-                    '?' => 4, // Question/unclear
-                    _ => 5,   // Default
-                };
-                
-                // Extract due dates from common patterns
-                let due_date = self.extract_due_date_from_title(title);
-                
-                // Extract tags from title and clean it
-                let (clean_title, mut tags) = Self::extract_tags_and_clean_title(title);
-                
-                // Add file context as tag
-                tags.push(format!("file:{}", file_name.replace(".md", "")));
-                
-                tasks.push(Task {
-                    id: format!("obsidian_{}_{}", file_name, task_id),
-                    title: clean_title,
-                    description: Some(format!("From {}, line {}", file_name, line_num + 1)),
-                    due_date,
-                    priority,
-                    status,
-                    tags,
-                    source: "obsidian".to_string(),
-                });
-                
-                task_id += 1;
-                
-                if tasks.len() >= self.config.max_tasks {
-                    break;
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// Extract due date from task title using common patterns
-    fn extract_due_date_from_title(&self, title: &str) -> Option<DateTime<Utc>> {
-        // Look for any YYYY-MM-DD pattern anywhere in the title
-        use regex::Regex;
-        use std::sync::OnceLock;
-
-        static DATE_RE: OnceLock<Regex> = OnceLock::new();
-        let date_re = DATE_RE.get_or_init(|| Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap());
-
-        if let Some(m) = date_re.find(title) {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(m.as_str(), "%Y-%m-%d") {
-                return Some(date.and_hms_opt(23, 59, 59).unwrap().and_utc());
-            }
-        }
-
-        // Look for "due:" or "deadline:" followed by date
-        for prefix in &["due:", "deadline:", "by ", "\u{1F4C5} "] {
-            if let Some(pos) = title.to_lowercase().find(prefix) {
-                let after_prefix = &title[pos + prefix.len()..];
-                if let Some(date_str) = after_prefix.split_whitespace().next() {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                        return Some(date.and_hms_opt(23, 59, 59).unwrap().and_utc());
-                    }
-                }
-            }
-        }
-
-        None
-    }
 }
 
 #[async_trait]
@@ -543,15 +372,13 @@ impl ContextSource for TasksContextSource {
         match self.source_type {
             TaskSourceType::Todoist => "tasks_todoist",
             TaskSourceType::LocalFile => "tasks_local",
-            TaskSourceType::Obsidian => "tasks_obsidian",
         }
     }
-    
+
     fn display_name(&self) -> &str {
         match self.source_type {
             TaskSourceType::Todoist => "Todoist Tasks",
             TaskSourceType::LocalFile => "Local Task File",
-            TaskSourceType::Obsidian => "Obsidian Tasks",
         }
     }
     
@@ -612,7 +439,6 @@ impl ContextSource for TasksContextSource {
         match self.source_type {
             TaskSourceType::Todoist => vec!["api_key".to_string()],
             TaskSourceType::LocalFile => vec!["file_path".to_string()],
-            TaskSourceType::Obsidian => vec![],
         }
     }
 }
