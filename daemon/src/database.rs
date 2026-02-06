@@ -919,6 +919,31 @@ impl DatabaseInner {
         })
     }
 
+    /// Get the N most recent insights (for deduplication in prompts)
+    pub fn get_recent_insights(&self, limit: u32) -> JasperResult<Vec<Insight>> {
+        self.with_connection_retry(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, emoji, insight, context_hash, created_at, expires_at, is_active
+                 FROM insights
+                 ORDER BY created_at DESC
+                 LIMIT ?",
+            )?;
+            let insights = stmt.query_map(params![limit], |row| {
+                Ok(Insight {
+                    id: row.get(0)?,
+                    emoji: row.get(1)?,
+                    insight: row.get(2)?,
+                    context_hash: row.get(3)?,
+                    created_at: DateTime::from_timestamp(row.get::<_, i64>(4)?, 0).unwrap_or_default(),
+                    expires_at: row.get::<_, Option<i64>>(5)?
+                        .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
+                    is_active: row.get::<_, i64>(6)? != 0,
+                })
+            })?.collect::<Result<Vec<_>, _>>()?;
+            Ok(insights)
+        })
+    }
+
     /// Store context snapshot that triggered an insight
     pub fn store_context_snapshot(&self, insight_id: i64, source: &str, snapshot_json: &str, significance_score: Option<f32>) -> JasperResult<i64> {
         self.with_connection_retry(|conn| {

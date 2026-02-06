@@ -3,12 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use crate::context_sources;
+
 /// Represents a snapshot of context at a point in time
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSnapshot {
     pub calendar_events: Vec<CalendarEventSummary>,
     pub weather: Option<WeatherSummary>,
     pub tasks: Vec<TaskSummary>,
+    /// Full notes context (projects, relationships, focus areas) — passed through to AI prompt
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_context: Option<context_sources::NotesContext>,
+    /// Full weather context (forecasts, alerts) — passed through to AI prompt
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather_context: Option<context_sources::WeatherContext>,
     pub timestamp: DateTime<Utc>,
     pub context_hash: String,
 }
@@ -70,26 +78,27 @@ impl SignificanceEngine {
 
     /// Analyze a new context snapshot and determine if changes are significant
     pub fn analyze_context(&self, new_snapshot: ContextSnapshot) -> (bool, Vec<SignificantChange>) {
-        // If we have no previous snapshot, this is the initial context
-        let last_snapshot_lock = self.last_snapshot.lock();
-        let Some(ref last) = *last_snapshot_lock else {
+        // Clone the previous snapshot (if any) and release the lock immediately
+        let previous = self.last_snapshot.lock().clone();
+
+        let Some(ref last) = previous else {
             info!("Initial context detected - significant by default");
-            drop(last_snapshot_lock);
             *self.last_snapshot.lock() = Some(new_snapshot);
             return (true, vec![SignificantChange::InitialContext]);
         };
 
         // Check minimum time between AI calls
-        let last_ai_call_lock = self.last_ai_call.lock();
-        if let Some(last_call) = *last_ai_call_lock {
-            let time_since_last = Utc::now() - last_call;
-            if time_since_last < self.min_time_between_calls {
-                debug!("Skipping analysis - too soon since last AI call ({} seconds ago)", 
-                    time_since_last.num_seconds());
-                return (false, vec![]);
+        {
+            let last_ai_call = self.last_ai_call.lock();
+            if let Some(last_call) = *last_ai_call {
+                let time_since_last = Utc::now() - last_call;
+                if time_since_last < self.min_time_between_calls {
+                    debug!("Skipping analysis - too soon since last AI call ({} seconds ago)",
+                        time_since_last.num_seconds());
+                    return (false, vec![]);
+                }
             }
         }
-        drop(last_ai_call_lock);
 
         let mut changes = Vec::new();
 
@@ -106,15 +115,15 @@ impl SignificanceEngine {
 
         // Determine if any changes are significant
         let is_significant = !changes.is_empty();
-        
+
+        // Always update the snapshot to track incremental changes
+        *self.last_snapshot.lock() = Some(new_snapshot);
+
         if is_significant {
             info!("Significant changes detected: {:?}", changes);
-            *self.last_snapshot.lock() = Some(new_snapshot);
             *self.last_ai_call.lock() = Some(Utc::now());
         } else {
             debug!("No significant changes detected");
-            // Update snapshot even if not significant, to track incremental changes
-            *self.last_snapshot.lock() = Some(new_snapshot);
         }
 
         (is_significant, changes)
@@ -231,6 +240,11 @@ impl SignificanceEngine {
         changes
     }
 
+    /// Record that an AI call was made (used by heartbeat triggers to respect cooldown)
+    pub fn record_ai_call(&self) {
+        *self.last_ai_call.lock() = Some(Utc::now());
+    }
+
     /// Force the next context to be considered significant (useful after cache clear)
     pub fn reset(&self) {
         *self.last_snapshot.lock() = None;
@@ -245,11 +259,13 @@ mod tests {
 
     #[test]
     fn test_initial_context_is_significant() {
-        let mut engine = SignificanceEngine::new();
+        let engine = SignificanceEngine::new();
         let snapshot = ContextSnapshot {
             calendar_events: vec![],
             weather: None,
             tasks: vec![],
+            notes_context: None,
+            weather_context: None,
             timestamp: Utc::now(),
             context_hash: "test".to_string(),
         };
@@ -261,12 +277,14 @@ mod tests {
 
     #[test]
     fn test_new_calendar_event_is_significant() {
-        let mut engine = SignificanceEngine::new();
+        let engine = SignificanceEngine::new();
         
         let snapshot1 = ContextSnapshot {
             calendar_events: vec![],
             weather: None,
             tasks: vec![],
+            notes_context: None,
+            weather_context: None,
             timestamp: Utc::now(),
             context_hash: "test1".to_string(),
         };
@@ -282,6 +300,8 @@ mod tests {
             }],
             weather: None,
             tasks: vec![],
+            notes_context: None,
+            weather_context: None,
             timestamp: Utc::now(),
             context_hash: "test2".to_string(),
         };
@@ -296,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_small_time_change_not_significant() {
-        let mut engine = SignificanceEngine::new();
+        let engine = SignificanceEngine::new();
         
         let event = CalendarEventSummary {
             id: "1".to_string(),
@@ -310,6 +330,8 @@ mod tests {
             calendar_events: vec![event.clone()],
             weather: None,
             tasks: vec![],
+            notes_context: None,
+            weather_context: None,
             timestamp: Utc::now(),
             context_hash: "test1".to_string(),
         };
@@ -322,6 +344,8 @@ mod tests {
             calendar_events: vec![event2],
             weather: None,
             tasks: vec![],
+            notes_context: None,
+            weather_context: None,
             timestamp: Utc::now(),
             context_hash: "test2".to_string(),
         };

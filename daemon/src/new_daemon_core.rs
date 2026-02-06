@@ -1,7 +1,7 @@
 use crate::errors::JasperResult;
 use crate::database::{Database, Insight};
-use crate::significance_engine::{SignificanceEngine, ContextSnapshot as ContextSnapshotSummary};
-use crate::context_sources::ContextSourceManager;
+use crate::significance_engine::{SignificanceEngine, SignificantChange, ContextSnapshot as ContextSnapshotSummary};
+use crate::context_sources::{self, ContextSourceManager};
 use crate::api_manager::ApiManager;
 use crate::config::Config;
 use crate::new_dbus_service::DbusSignalEmitter;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::time::{Duration, interval};
 use tracing::{info, debug, warn, error};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Timelike};
 use serde_json;
 
 // Trait to detect emoji characters
@@ -187,31 +187,76 @@ impl SimplifiedDaemonCore {
         *running = false;
     }
 
-    /// Check context for changes and analyze if significant
+    /// Determine the current heartbeat phase based on time of day.
+    /// Returns the phase name if we should fire a heartbeat, or None if one already fired this phase.
+    fn should_fire_heartbeat(&self) -> Option<String> {
+        let tz = self.config.read().get_timezone();
+        let local_now = Utc::now().with_timezone(&tz);
+        let hour = local_now.hour();
+
+        // Define heartbeat phases: morning (7-8), midday (12-13), evening (18-19)
+        let phase = match hour {
+            7..=8 => Some("morning"),
+            12..=13 => Some("midday"),
+            18..=19 => Some("evening"),
+            _ => None,
+        };
+
+        phase.map(|p| p.to_string())
+    }
+
+    /// Check context for changes and analyze if significant.
+    /// Uses a dual trigger model: heartbeat (time-of-day phases) + event-driven (context changes).
     async fn check_and_analyze(&self) -> JasperResult<()> {
         debug!("Checking context for significant changes");
 
         // Collect current context from all sources
         let current_context = self.collect_current_context().await?;
-        
-        // Check if changes are significant
+
+        // Determine trigger: context change or heartbeat
         let (is_significant, changes) = self.significance_engine.analyze_context(current_context.clone());
 
-        if is_significant {
+        let trigger = if is_significant {
             info!("Significant changes detected: {:?}", changes);
-            
-            // Call AI for analysis
-            match self.analyze_with_ai(&current_context).await {
+            Some(InsightTrigger::ContextChange(changes))
+        } else if let Some(phase) = self.should_fire_heartbeat() {
+            // Check if we already fired a heartbeat this phase by looking at recent insights
+            let dominated_by_recent = self.database.get_recent_insights(1)
+                .unwrap_or_default()
+                .first()
+                .map(|i| {
+                    let age_minutes = (Utc::now() - i.created_at).num_minutes();
+                    // Don't fire heartbeat if we generated an insight within the last 90 minutes
+                    age_minutes < 90
+                })
+                .unwrap_or(false);
+
+            if dominated_by_recent {
+                debug!("Skipping heartbeat — recent insight is still fresh");
+                None
+            } else {
+                info!("Heartbeat trigger: {} phase", phase);
+                // Record this as an AI call in the significance engine so it respects the cooldown
+                self.significance_engine.record_ai_call();
+                Some(InsightTrigger::Heartbeat(phase))
+            }
+        } else {
+            None
+        };
+
+        if let Some(trigger) = trigger {
+            // Call AI for analysis with full context and trigger info
+            match self.analyze_with_ai(&current_context, &trigger).await {
                 Ok(insight) => {
                     // Store the insight
                     match self.database.store_insight(&insight.emoji, &insight.text, Some(&insight.context_hash)) {
                         Ok(insight_id) => {
                             info!("Stored new insight with ID: {}", insight_id);
-                            
+
                             // Store the context snapshot that triggered this insight
                             let snapshot_json = serde_json::to_string(&current_context)
                                 .unwrap_or_else(|_| "{}".to_string());
-                            
+
                             if let Err(e) = self.database.store_context_snapshot(
                                 insight_id,
                                 "combined",
@@ -234,7 +279,7 @@ impl SimplifiedDaemonCore {
                 }
             }
         } else {
-            debug!("No significant changes detected");
+            debug!("No trigger fired — skipping AI call");
         }
 
         Ok(())
@@ -266,13 +311,16 @@ impl SimplifiedDaemonCore {
             }
         };
 
-        // Extract weather and tasks from context data
+        // Extract weather, tasks, and full notes context from context data
         let mut weather: Option<crate::significance_engine::WeatherSummary> = None;
         let mut tasks: Vec<crate::significance_engine::TaskSummary> = Vec::new();
+        let mut notes_context: Option<context_sources::NotesContext> = None;
+        let mut weather_context: Option<context_sources::WeatherContext> = None;
 
         for ctx in &context_data {
             match &ctx.content {
-                crate::context_sources::ContextContent::Weather(weather_ctx) => {
+                context_sources::ContextContent::Weather(weather_ctx) => {
+                    weather_context = Some(weather_ctx.clone());
                     // Parse temperature from forecast or conditions
                     if let Some(forecast) = weather_ctx.forecast.first() {
                         weather = Some(crate::significance_engine::WeatherSummary {
@@ -282,24 +330,25 @@ impl SimplifiedDaemonCore {
                         });
                     }
                 }
-                crate::context_sources::ContextContent::Tasks(task_ctx) => {
+                context_sources::ContextContent::Tasks(task_ctx) => {
                     tasks.extend(task_ctx.tasks.iter().map(|t| {
                         crate::significance_engine::TaskSummary {
                             id: t.id.clone(),
                             title: t.title.clone(),
                             due: t.due_date,
-                            completed: matches!(t.status, crate::context_sources::TaskStatus::Completed),
+                            completed: matches!(t.status, context_sources::TaskStatus::Completed),
                         }
                     }));
                 }
-                crate::context_sources::ContextContent::Notes(notes_ctx) => {
-                    // Extract tasks from notes as well
+                context_sources::ContextContent::Notes(notes_ctx) => {
+                    notes_context = Some(notes_ctx.clone());
+                    // Also extract tasks from notes for the significance engine
                     tasks.extend(notes_ctx.pending_tasks.iter().map(|t| {
                         crate::significance_engine::TaskSummary {
                             id: t.id.clone(),
                             title: t.title.clone(),
                             due: t.due_date,
-                            completed: matches!(t.status, crate::context_sources::TaskStatus::Completed),
+                            completed: matches!(t.status, context_sources::TaskStatus::Completed),
                         }
                     }));
                 }
@@ -321,17 +370,19 @@ impl SimplifiedDaemonCore {
             calendar_events,
             weather,
             tasks,
+            notes_context,
+            weather_context,
             timestamp: now,
             context_hash,
         })
     }
 
     /// Call AI service for analysis, with automatic retry on transient failures
-    async fn analyze_with_ai(&self, context: &ContextSnapshotSummary) -> JasperResult<AiInsight> {
+    async fn analyze_with_ai(&self, context: &ContextSnapshotSummary, trigger: &InsightTrigger) -> JasperResult<AiInsight> {
         debug!("Calling AI service for context analysis");
 
         // Build the request body once so retries reuse it
-        let request_body = self.build_anthropic_request(context)?;
+        let request_body = self.build_anthropic_request(context, trigger)?;
 
         match self.api_manager.execute_with_retry(|| {
             let body = request_body.clone();
@@ -359,63 +410,280 @@ impl SimplifiedDaemonCore {
         }
     }
 
-    /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
-    fn build_anthropic_request(&self, context: &ContextSnapshotSummary) -> JasperResult<serde_json::Value> {
-        let mut context_summary = String::new();
+    /// Determine the current time-of-day phase for the user's timezone
+    fn get_time_of_day_phase(&self) -> (&'static str, DateTime<chrono::FixedOffset>) {
+        let tz = self.config.read().get_timezone();
+        let local_now = Utc::now().with_timezone(&tz);
+        // Convert to FixedOffset for storage
+        let fixed_now = local_now.fixed_offset();
+        let hour = fixed_now.hour();
+        let phase = match hour {
+            5..=8 => "early morning — you're starting your day",
+            9..=11 => "morning — your day is underway",
+            12..=13 => "midday",
+            14..=16 => "afternoon",
+            17..=19 => "evening — winding down the day",
+            20..=22 => "night — wrapping up",
+            _ => "late night",
+        };
+        (phase, fixed_now)
+    }
 
+    /// Format a datetime as a human-relative time string (e.g., "in 45 minutes", "tomorrow at 3pm")
+    fn format_relative_time(now: &DateTime<chrono::FixedOffset>, target: &DateTime<Utc>) -> String {
+        let target_local = target.with_timezone(&now.timezone());
+        let diff = target_local.signed_duration_since(*now);
+        let minutes = diff.num_minutes();
+        let hours = diff.num_hours();
+
+        if minutes < 0 {
+            let abs_min = minutes.abs();
+            if abs_min < 60 {
+                format!("{} minutes ago", abs_min)
+            } else if abs_min < 1440 {
+                format!("{} hours ago", (abs_min / 60))
+            } else {
+                format!("{} days ago", (abs_min / 1440))
+            }
+        } else if minutes < 60 {
+            format!("in {} minutes", minutes)
+        } else if hours < 24 {
+            if hours == 1 {
+                format!("in about an hour ({})", target_local.format("%I:%M %p"))
+            } else {
+                format!("in {} hours ({})", hours, target_local.format("%I:%M %p"))
+            }
+        } else {
+            let days = hours / 24;
+            if days == 1 {
+                format!("tomorrow at {}", target_local.format("%I:%M %p"))
+            } else {
+                format!("in {} days ({})", days, target_local.format("%a %I:%M %p"))
+            }
+        }
+    }
+
+    /// Format a relative deadline for tasks (e.g., "due in 2 days", "OVERDUE by 3 days")
+    fn format_relative_deadline(now: &DateTime<chrono::FixedOffset>, due: &DateTime<Utc>) -> String {
+        let due_local = due.with_timezone(&now.timezone());
+        let diff = due_local.signed_duration_since(*now);
+        let hours = diff.num_hours();
+        let days = diff.num_days();
+
+        if hours < 0 {
+            let abs_days = days.abs();
+            if abs_days == 0 {
+                "OVERDUE (due today)".to_string()
+            } else if abs_days == 1 {
+                "OVERDUE by 1 day".to_string()
+            } else {
+                format!("OVERDUE by {} days", abs_days)
+            }
+        } else if hours < 24 {
+            "due today".to_string()
+        } else if days == 1 {
+            "due tomorrow".to_string()
+        } else if days <= 7 {
+            format!("due in {} days", days)
+        } else {
+            format!("due in {} weeks", days / 7)
+        }
+    }
+
+    /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
+    fn build_anthropic_request(&self, context: &ContextSnapshotSummary, trigger: &InsightTrigger) -> JasperResult<serde_json::Value> {
+        let (time_phase, local_now) = self.get_time_of_day_phase();
+
+        // --- Build the system message with personality and guidance ---
+        let (personality, _timezone_str) = {
+            let cfg = self.config.read();
+            let (p, tz) = cfg.get_personality_config();
+            (p.clone(), tz.to_string())
+        };
+
+        let persona_desc = personality.persona_reference
+            .as_deref()
+            .map(|r| format!(" ({})", r))
+            .unwrap_or_default();
+
+        // Get recent insights for deduplication
+        let recent_insights = self.database.get_recent_insights(5)
+            .unwrap_or_default();
+        let recent_insights_text = if recent_insights.is_empty() {
+            "None yet — this is your first insight of the session.".to_string()
+        } else {
+            recent_insights.iter()
+                .map(|i| format!("- {} {} ({})", i.emoji, i.insight,
+                    Self::format_relative_time(&local_now, &i.created_at)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let system_message = format!(
+            "You are Jasper, a {persona}{persona_ref}. \
+You provide a single glanceable insight for {title}'s status bar — like Android's At a Glance widget, but smarter.\n\n\
+Current time: {now} ({phase}).\n\n\
+Your job: Surface the ONE most useful thing {title} needs to know or be reminded of right now. \
+Think about what a thoughtful person who knows their whole life would tap them on the shoulder about.\n\n\
+Prioritize (in rough order):\n\
+1. Things that need action or preparation in the next 1-2 hours\n\
+2. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
+3. Scheduling conflicts or logistical issues they haven't noticed\n\
+4. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\
+5. People they haven't reached out to in a while, if it's been long enough to matter\n\n\
+Do NOT:\n\
+- Simply restate a calendar entry (\"You have a meeting at 3pm\") — add value beyond what a calendar shows\n\
+- Focus on weather unless it meaningfully impacts plans or activities\n\
+- Repeat something you've already surfaced recently (see recent insights below)\n\
+- Be robotic or generic — write like someone who knows {title} personally, with warmth\n\n\
+Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\n\
+Recent insights (DO NOT repeat these):\n{recent_insights}",
+            persona = personality.assistant_persona,
+            persona_ref = persona_desc,
+            title = personality.user_title,
+            now = local_now.format("%A, %B %-d at %-I:%M %p"),
+            phase = time_phase,
+            formality = personality.formality,
+            recent_insights = recent_insights_text,
+        );
+
+        // --- Build the context (user message) with full data and relative times ---
+        let mut context_parts: Vec<String> = Vec::new();
+
+        // Trigger reason
+        let trigger_text = match trigger {
+            InsightTrigger::Heartbeat(phase) => format!("Trigger: Regular {} check-in.", phase),
+            InsightTrigger::ContextChange(changes) => {
+                let change_descriptions: Vec<String> = changes.iter().map(|c| match c {
+                    SignificantChange::NewCalendarEvent(title) => format!("New event added: \"{}\"", title),
+                    SignificantChange::CancelledCalendarEvent(title) => format!("Event cancelled: \"{}\"", title),
+                    SignificantChange::EventTimeChanged { event_id, time_diff_hours } =>
+                        format!("Event {} moved by {:.1} hours", event_id, time_diff_hours),
+                    SignificantChange::EventLocationChanged { event_id } =>
+                        format!("Event {} location changed", event_id),
+                    SignificantChange::WeatherConditionChanged { from, to } =>
+                        format!("Weather changed: {} → {}", from, to),
+                    SignificantChange::WeatherTemperatureChanged { diff } =>
+                        format!("Temperature shifted by {}°F", diff),
+                    SignificantChange::NewTask(title) => format!("New task: \"{}\"", title),
+                    SignificantChange::TaskCompleted(title) => format!("Task completed: \"{}\"", title),
+                    SignificantChange::TaskDueChanged { task_id, time_diff_hours } =>
+                        format!("Task {} due date moved by {:.1} hours", task_id, time_diff_hours),
+                    SignificantChange::InitialContext => "Initial startup — first look at the day.".to_string(),
+                }).collect();
+                format!("Trigger: Context changed — {}", change_descriptions.join("; "))
+            }
+        };
+        context_parts.push(trigger_text);
+
+        // Calendar events with relative times
         if !context.calendar_events.is_empty() {
-            context_summary.push_str("Calendar Events (next 24h):\n");
+            let mut cal_section = String::from("\nCalendar (next 24h):");
             for event in &context.calendar_events {
-                context_summary.push_str(&format!(
-                    "- {} at {}{}\n",
-                    event.title,
-                    event.start_time.format("%I:%M %p"),
-                    event.location.as_ref().map(|l| format!(" (at {})", l)).unwrap_or_default()
+                let relative = Self::format_relative_time(&local_now, &event.start_time);
+                let location = event.location.as_ref()
+                    .map(|l| format!(", at {}", l))
+                    .unwrap_or_default();
+                cal_section.push_str(&format!("\n- \"{}\" — {}{}", event.title, relative, location));
+            }
+            context_parts.push(cal_section);
+        }
+
+        // Tasks with relative deadlines
+        if !context.tasks.is_empty() {
+            let mut task_section = String::from("\nTasks:");
+            for task in &context.tasks {
+                if task.completed { continue; }
+                let deadline = task.due.as_ref()
+                    .map(|d| format!(" ({})", Self::format_relative_deadline(&local_now, d)))
+                    .unwrap_or_else(|| " (no due date)".to_string());
+                task_section.push_str(&format!("\n- {}{}", task.title, deadline));
+            }
+            context_parts.push(task_section);
+        }
+
+        // Full weather context (if available)
+        if let Some(weather_ctx) = &context.weather_context {
+            let mut weather_section = format!("\nWeather: {}", weather_ctx.current_conditions);
+            if !weather_ctx.forecast.is_empty() {
+                let today = &weather_ctx.forecast[0];
+                weather_section.push_str(&format!(
+                    " (High: {:.0}°F, Low: {:.0}°F, {}% chance of precipitation)",
+                    today.temperature_high, today.temperature_low, (today.precipitation_chance * 100.0) as i32
                 ));
             }
-            context_summary.push('\n');
-        }
-
-        if let Some(weather) = &context.weather {
-            context_summary.push_str(&format!("Weather: {} ({}°F)\n\n", weather.condition, weather.temperature));
-        }
-
-        if !context.tasks.is_empty() {
-            context_summary.push_str("Upcoming Tasks:\n");
-            for task in &context.tasks {
-                context_summary.push_str(&format!("- {}\n", task.title));
+            if !weather_ctx.alerts.is_empty() {
+                weather_section.push_str(&format!("\nWeather alerts: {}", weather_ctx.alerts.join(", ")));
             }
-            context_summary.push('\n');
+            context_parts.push(weather_section);
+        } else if let Some(weather) = &context.weather {
+            context_parts.push(format!("\nWeather: {} ({}°F)", weather.condition, weather.temperature));
         }
 
-        if context_summary.is_empty() {
-            context_summary = "No significant context available.".to_string();
+        // Notes context: projects, relationships, focus areas
+        if let Some(notes) = &context.notes_context {
+            // Active projects with deadlines
+            let active_projects: Vec<_> = notes.active_projects.iter()
+                .filter(|p| matches!(p.status, context_sources::ProjectStatus::Active | context_sources::ProjectStatus::Pending))
+                .collect();
+            if !active_projects.is_empty() {
+                let mut proj_section = String::from("\nActive Projects:");
+                for project in &active_projects {
+                    let deadline = project.due_date.as_ref()
+                        .map(|d| format!(" ({})", Self::format_relative_deadline(&local_now, d)))
+                        .unwrap_or_default();
+                    let progress = if project.progress > 0.0 {
+                        format!(", {:.0}% complete", project.progress * 100.0)
+                    } else { String::new() };
+                    proj_section.push_str(&format!("\n- {}{}{}", project.name, deadline, progress));
+                }
+                context_parts.push(proj_section);
+            }
+
+            // Relationship alerts
+            if !notes.relationship_alerts.is_empty() {
+                let mut rel_section = String::from("\nPeople to reconnect with:");
+                for alert in notes.relationship_alerts.iter().take(5) {
+                    let company = alert.company.as_ref()
+                        .map(|c| format!(" ({})", c))
+                        .unwrap_or_default();
+                    rel_section.push_str(&format!(
+                        "\n- {}{} — last contact {} days ago ({})",
+                        alert.person_name, company, alert.days_since_contact,
+                        format!("{:?}", alert.relationship_type).to_lowercase()
+                    ));
+                }
+                context_parts.push(rel_section);
+            }
+
+            // Today's focus areas from daily notes
+            let focus_areas: Vec<_> = notes.daily_notes.iter()
+                .flat_map(|n| n.focus_areas.iter())
+                .collect();
+            if !focus_areas.is_empty() {
+                let mut focus_section = String::from("\nToday's focus areas:");
+                for area in &focus_areas {
+                    focus_section.push_str(&format!("\n- {}", area));
+                }
+                context_parts.push(focus_section);
+            }
         }
 
-        let (_, model, max_tokens) = {
+        let user_message = context_parts.join("\n");
+
+        let (_, model, _max_tokens) = {
             let cfg = self.config.read();
             let (_, model, max_tokens, _) = cfg.get_api_config();
             ((), model, max_tokens)
         };
 
-        let prompt = format!(
-            "You are Jasper, a helpful AI assistant. Analyze this context and provide a brief, actionable insight with an appropriate emoji.
-
-Context:
-{}
-
-Provide response in this format:
-Emoji: [single emoji]
-Insight: [brief actionable insight in 1-2 sentences]",
-            context_summary
-        );
-
         Ok(serde_json::json!({
             "model": model,
-            "max_tokens": max_tokens.min(200),
+            "max_tokens": 300,
+            "system": system_message,
             "messages": [{
                 "role": "user",
-                "content": prompt
+                "content": user_message
             }],
             "_context_hash": context.context_hash
         }))
@@ -481,42 +749,62 @@ Insight: [brief actionable insight in 1-2 sentences]",
         }, tokens_used))
     }
     
-    /// Parse AI response to extract emoji and insight
+    /// Parse AI response to extract emoji and insight.
+    /// Supports both "Emoji:/Insight:" format and freeform "emoji text" format.
     fn parse_ai_response(&self, content: &str) -> (String, String) {
+        let content = content.trim();
         let lines: Vec<&str> = content.lines().collect();
-        let mut emoji = "🤖".to_string();
-        let mut insight = content.to_string();
-        
+        let mut emoji = Option::<String>::None;
+        let mut insight = Option::<String>::None;
+
+        // Try structured format first
         for line in &lines {
             if line.starts_with("Emoji:") {
-                emoji = line.replace("Emoji:", "").trim().to_string();
-                if emoji.is_empty() {
-                    emoji = "🤖".to_string();
-                }
+                let e = line.replace("Emoji:", "").trim().to_string();
+                if !e.is_empty() { emoji = Some(e); }
             } else if line.starts_with("Insight:") {
-                insight = line.replace("Insight:", "").trim().to_string();
+                let i = line.replace("Insight:", "").trim().to_string();
+                if !i.is_empty() { insight = Some(i); }
             }
         }
-        
-        // If we couldn't parse the format, use the full content as insight
-        if insight == content && !content.is_empty() {
-            // Try to extract the first emoji from the content
-            let chars: Vec<char> = content.chars().collect();
-            for ch in &chars {
-                if ch.is_emoji_char() {
-                    emoji = ch.to_string();
-                    break;
+
+        // If structured parsing worked, return
+        if let (Some(e), Some(i)) = (emoji.clone(), insight.clone()) {
+            return (e, i);
+        }
+
+        // Freeform: expect the response to start with an emoji followed by text
+        let mut chars = content.chars().peekable();
+        let mut leading_emoji = String::new();
+
+        // Collect leading emoji characters (may be multi-codepoint)
+        while let Some(&ch) = chars.peek() {
+            if ch.is_emoji_char() || ch == '\u{FE0F}' || ch == '\u{200D}' {
+                leading_emoji.push(ch);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        let remaining: String = chars.collect();
+        let remaining = remaining.trim().to_string();
+
+        if !leading_emoji.is_empty() && !remaining.is_empty() {
+            return (leading_emoji, remaining);
+        }
+
+        // Last resort: use full content as insight
+        (
+            emoji.unwrap_or_else(|| "🤖".to_string()),
+            insight.unwrap_or_else(|| {
+                if content.is_empty() {
+                    "AI analysis complete - check your schedule and priorities".to_string()
+                } else {
+                    content.to_string()
                 }
-            }
-            // Remove the emoji from the insight if found
-            insight = content.replace(&emoji, "").trim().to_string();
-        }
-        
-        if insight.is_empty() {
-            insight = "AI analysis complete - check your schedule and priorities".to_string();
-        }
-        
-        (emoji, insight)
+            })
+        )
     }
 
     /// Get the latest insight from database
@@ -558,6 +846,15 @@ Insight: [brief actionable insight in 1-2 sentences]",
         info!("Resetting significance engine");
         self.significance_engine.reset();
     }
+}
+
+/// What triggered the insight generation
+#[derive(Debug, Clone)]
+enum InsightTrigger {
+    /// Regular time-of-day heartbeat (morning, afternoon, evening)
+    Heartbeat(String),
+    /// Detected context change from significance engine
+    ContextChange(Vec<SignificantChange>),
 }
 
 /// Simplified AI insight result
