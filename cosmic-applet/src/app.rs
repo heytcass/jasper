@@ -299,6 +299,10 @@ async fn connect_and_register() -> Result<(String, String, i64), Box<dyn std::er
 
 async fn fetch_insight() -> Option<(i64, String, String)> {
     let proxy = dbus_client::connect().await.ok()?;
+    // Always re-register to ensure we're known to the daemon
+    let pid = std::process::id() as i32;
+    let _ = proxy.register_frontend(FRONTEND_ID.to_string(), pid).await;
+
     let (id, emoji, text, _hash) = proxy.get_latest_insight().await.ok()?;
     if id > 0 {
         Some((id, emoji, text))
