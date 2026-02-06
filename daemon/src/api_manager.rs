@@ -265,18 +265,14 @@ impl ApiManager {
                     )
                 },
                 ContextContent::Notes(notes_ctx) => {
-                    // Focus on project status and relationship alerts - ignore full content
+                    // Focus on project status - ignore full content
                     let project_statuses: Vec<String> = notes_ctx.active_projects.iter()
                         .map(|p| format!("{}:{:?}:{}", p.name, p.status, p.progress))
                         .collect();
-                    let alert_urgencies: Vec<String> = notes_ctx.relationship_alerts.iter()
-                        .map(|a| format!("{}:{}", a.person_name, a.urgency))
-                        .collect();
-                    format!("notes:{}:{}:{}:{}",
+                    format!("notes:{}:{}:{}",
                         notes_ctx.daily_notes.len(),
                         project_statuses.join("|"),
-                        notes_ctx.pending_tasks.len(),
-                        alert_urgencies.join("|")
+                        notes_ctx.pending_tasks.len()
                     )
                 },
                 ContextContent::Weather(weather_ctx) => {
@@ -285,10 +281,6 @@ impl ApiManager {
                         weather_ctx.current_conditions,
                         weather_ctx.alerts.join("|")
                     )
-                },
-                ContextContent::Generic(generic_ctx) => {
-                    // Use summary for generic context
-                    format!("generic:{}:{}", context.source_id, generic_ctx.summary)
                 }
             };
             

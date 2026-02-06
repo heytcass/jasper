@@ -529,8 +529,7 @@ Prioritize (in rough order):\n\
 1. Things that need action or preparation in the next 1-2 hours\n\
 2. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
 3. Scheduling conflicts or logistical issues they haven't noticed\n\
-4. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\
-5. People they haven't reached out to in a while, if it's been long enough to matter\n\n\
+4. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\n\
 Do NOT:\n\
 - Simply restate a calendar entry (\"You have a meeting at 3pm\") — add value beyond what a calendar shows\n\
 - Focus on weather unless it meaningfully impacts plans or activities\n\
@@ -638,22 +637,6 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                     proj_section.push_str(&format!("\n- {}{}{}", project.name, deadline, progress));
                 }
                 context_parts.push(proj_section);
-            }
-
-            // Relationship alerts
-            if !notes.relationship_alerts.is_empty() {
-                let mut rel_section = String::from("\nPeople to reconnect with:");
-                for alert in notes.relationship_alerts.iter().take(5) {
-                    let company = alert.company.as_ref()
-                        .map(|c| format!(" ({})", c))
-                        .unwrap_or_default();
-                    rel_section.push_str(&format!(
-                        "\n- {}{} — last contact {} days ago ({})",
-                        alert.person_name, company, alert.days_since_contact,
-                        format!("{:?}", alert.relationship_type).to_lowercase()
-                    ));
-                }
-                context_parts.push(rel_section);
             }
 
             // Today's focus areas from daily notes

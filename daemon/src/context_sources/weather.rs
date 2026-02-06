@@ -362,44 +362,6 @@ impl WeatherContextSource {
             }
         }
 
-        // If API key is placeholder, return sample data for demonstration
-        if self.api_key.as_ref().map_or(true, |key| key == "your_openweathermap_api_key_here") {
-            info!("Using demo weather data (API key not configured)");
-            return Ok(WeatherContext {
-                current_conditions: "Partly cloudy, 72°F (feels like 75°F), 65% humidity".to_string(),
-                forecast: vec![
-                    WeatherForecast {
-                        date: Utc::now(),
-                        temperature_high: 75.0,
-                        temperature_low: 65.0,
-                        conditions: "Partly Cloudy".to_string(),
-                        precipitation_chance: 0.2,
-                        description: "Pleasant weather with some clouds".to_string(),
-                    },
-                    WeatherForecast {
-                        date: Utc::now() + chrono::Duration::days(1),
-                        temperature_high: 78.0,
-                        temperature_low: 68.0,
-                        conditions: "Sunny".to_string(),
-                        precipitation_chance: 0.1,
-                        description: "Clear skies and warm temperatures".to_string(),
-                    },
-                    WeatherForecast {
-                        date: Utc::now() + chrono::Duration::days(2),
-                        temperature_high: 82.0,
-                        temperature_low: 70.0,
-                        conditions: "Thunderstorms".to_string(),
-                        precipitation_chance: 0.8,
-                        description: "Scattered thunderstorms in the afternoon".to_string(),
-                    },
-                ],
-                alerts: vec![
-                    "High chance of rain Saturday - bring an umbrella".to_string(),
-                    "Thunderstorms expected Saturday - plan indoor activities".to_string(),
-                ],
-            });
-        }
-        
         // Fetch current weather and forecast in parallel
         let (current_result, forecast_result) = tokio::join!(
             self.fetch_current_weather(),
