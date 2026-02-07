@@ -7,12 +7,11 @@ use cosmic::iced::{Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use tracing::{debug, info, warn};
 
 const FRONTEND_ID: &str = "cosmic-applet";
 
-#[derive(Default)]
 pub struct JasperApplet {
     core: cosmic::Core,
     popup: Option<Id>,
@@ -21,6 +20,22 @@ pub struct JasperApplet {
     current_text: String,
     insight_id: i64,
     daemon_online: bool,
+    last_updated: Option<std::time::Instant>,
+}
+
+impl Default for JasperApplet {
+    fn default() -> Self {
+        Self {
+            core: cosmic::Core::default(),
+            popup: None,
+            config: JasperAppletConfig::default(),
+            current_emoji: "\u{1f4c5}".to_string(),
+            current_text: "Connecting...".to_string(),
+            insight_id: 0,
+            daemon_online: false,
+            last_updated: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +83,7 @@ impl cosmic::Application for JasperApplet {
         let app = JasperApplet {
             core,
             config,
-            current_emoji: "\u{1f4c5}".to_string(), // calendar emoji
+            current_emoji: "\u{1f4c5}".to_string(),
             current_text: "Connecting...".to_string(),
             ..Default::default()
         };
@@ -108,8 +123,10 @@ impl cosmic::Application for JasperApplet {
     fn view(&self) -> Element<'_, Self::Message> {
         let label = if self.config.show_text_in_panel {
             let max = self.config.panel_text_max_chars as usize;
-            let display_text = if self.current_text.len() > max {
-                format!("{}...", &self.current_text[..max.saturating_sub(3)])
+            let display_text = if self.current_text.chars().count() > max {
+                let truncated: String =
+                    self.current_text.chars().take(max.saturating_sub(3)).collect();
+                format!("{truncated}...")
             } else {
                 self.current_text.clone()
             };
@@ -124,24 +141,57 @@ impl cosmic::Application for JasperApplet {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-        let status_text = if self.daemon_online {
-            &self.current_text
+        let status_label = if self.daemon_online {
+            "\u{1f7e2} Connected" // green circle
         } else {
-            "Daemon offline"
+            "\u{1f534} Daemon offline" // red circle
         };
 
-        let content = widget::list_column()
-            .padding(10)
-            .spacing(8)
-            .add(widget::text::title4(format!(
-                "{} Jasper Insight",
-                self.current_emoji
-            )))
-            .add(widget::text::body(status_text))
-            .add(
-                widget::button::text("Refresh")
-                    .on_press(Message::ForceRefresh),
-            );
+        let age_text = match self.last_updated {
+            Some(instant) => {
+                let secs = instant.elapsed().as_secs();
+                if secs < 5 {
+                    "just now".to_string()
+                } else if secs < 60 {
+                    format!("{secs}s ago")
+                } else {
+                    format!("{}m ago", secs / 60)
+                }
+            }
+            None => "never".to_string(),
+        };
+
+        let mut content = widget::list_column().padding(10).spacing(8);
+
+        // Header with emoji and title
+        content = content.add(widget::text::title4(format!(
+            "{} Jasper",
+            self.current_emoji
+        )));
+
+        // Status line
+        content = content.add(widget::text::caption(format!(
+            "{status_label}  \u{00b7}  Updated {age_text}"
+        )));
+
+        // Insight text
+        if self.daemon_online {
+            content = content.add(widget::text::body(&self.current_text));
+        } else {
+            content = content.add(widget::text::body(
+                "Start the daemon with: jasper-companion-daemon start",
+            ));
+        }
+
+        // Refresh button
+        content = content.add(
+            widget::button::text(if self.daemon_online {
+                "\u{1f504} Refresh"
+            } else {
+                "\u{1f50c} Reconnect"
+            })
+            .on_press(Message::ForceRefresh),
+        );
 
         self.core.applet.popup_container(content).into()
     }
@@ -151,9 +201,38 @@ impl cosmic::Application for JasperApplet {
 
         struct PollSub;
         struct HeartbeatSub;
+        struct DbusSignalSub;
 
         Subscription::batch(vec![
-            // Poll for new insights
+            // Listen for D-Bus signals from daemon (instant updates)
+            Subscription::run_with_id(
+                std::any::TypeId::of::<DbusSignalSub>(),
+                cosmic::iced::stream::channel(4, move |mut channel| async move {
+                    loop {
+                        // Try to connect and listen for signals
+                        if let Ok(proxy) = dbus_client::connect().await {
+                            if let Ok(mut stream) = proxy.receive_insight_updated().await {
+                                info!("Listening for D-Bus insight signals");
+                                while let Some(signal) = stream.next().await {
+                                    if let Ok(args) = signal.args() {
+                                        let _ = channel
+                                            .send(Message::InsightReceived(
+                                                args.insight_id,
+                                                args.emoji.to_string(),
+                                                args.preview.to_string(),
+                                            ))
+                                            .await;
+                                    }
+                                }
+                                debug!("D-Bus signal stream ended");
+                            }
+                        }
+                        // Retry connection after delay
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                }),
+            ),
+            // Poll as fallback (catches daemon restarts, missed signals)
             Subscription::run_with_id(
                 std::any::TypeId::of::<PollSub>(),
                 cosmic::iced::stream::channel(4, move |mut channel| async move {
@@ -213,6 +292,7 @@ impl cosmic::Application for JasperApplet {
                 self.current_emoji = emoji;
                 self.current_text = text;
                 self.daemon_online = true;
+                self.last_updated = Some(std::time::Instant::now());
                 debug!("Insight updated: id={}", id);
             }
             Message::DaemonOffline => {
@@ -234,7 +314,6 @@ impl cosmic::Application for JasperApplet {
             Message::RefreshComplete(success) => {
                 if success {
                     info!("Force refresh completed");
-                    // Fetch the new insight immediately
                     return Task::perform(fetch_insight(), |result| {
                         cosmic::Action::App(match result {
                             Some((id, emoji, text)) => Message::InsightReceived(id, emoji, text),
@@ -257,9 +336,7 @@ impl cosmic::Application for JasperApplet {
                 return Task::perform(
                     async {
                         if let Ok(proxy) = dbus_client::connect().await {
-                            let _ = proxy
-                                .heartbeat(FRONTEND_ID.to_string())
-                                .await;
+                            let _ = proxy.heartbeat(FRONTEND_ID.to_string()).await;
                         }
                     },
                     |_| cosmic::Action::App(Message::ConfigChannel),
@@ -288,10 +365,13 @@ impl cosmic::Application for JasperApplet {
     }
 }
 
-async fn connect_and_register() -> Result<(String, String, i64), Box<dyn std::error::Error + Send + Sync>> {
+async fn connect_and_register(
+) -> Result<(String, String, i64), Box<dyn std::error::Error + Send + Sync>> {
     let proxy = dbus_client::connect().await?;
     let pid = std::process::id() as i32;
-    proxy.register_frontend(FRONTEND_ID.to_string(), pid).await?;
+    proxy
+        .register_frontend(FRONTEND_ID.to_string(), pid)
+        .await?;
 
     let (id, emoji, text, _hash) = proxy.get_latest_insight().await?;
     Ok((emoji, text, id))
@@ -301,7 +381,9 @@ async fn fetch_insight() -> Option<(i64, String, String)> {
     let proxy = dbus_client::connect().await.ok()?;
     // Always re-register to ensure we're known to the daemon
     let pid = std::process::id() as i32;
-    let _ = proxy.register_frontend(FRONTEND_ID.to_string(), pid).await;
+    let _ = proxy
+        .register_frontend(FRONTEND_ID.to_string(), pid)
+        .await;
 
     let (id, emoji, text, _hash) = proxy.get_latest_insight().await.ok()?;
     if id > 0 {
