@@ -187,14 +187,60 @@ async fn start_daemon() -> Result<()> {
 }
 
 async fn show_status() -> Result<()> {
-    println!("Daemon Status: Infrastructure Ready");
-    println!("TODO: Implement D-Bus status check");
+    let connection = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(_) => {
+            println!("Daemon Status: Not Running");
+            println!("  D-Bus session bus unavailable");
+            return Ok(());
+        }
+    };
+
+    match connection
+        .call_method(
+            Some("org.jasper.Daemon"),
+            "/org/jasper/Daemon",
+            Some("org.jasper.Daemon1"),
+            "GetStatus",
+            &(),
+        )
+        .await
+    {
+        Ok(reply) => {
+            let (is_running, active_frontends, insights_count): (bool, u32, i64) =
+                reply.body().deserialize()?;
+            println!("Daemon Status: {}", if is_running { "Running" } else { "Stopped" });
+            println!("  Active frontends: {}", active_frontends);
+            println!("  Total insights:   {}", insights_count);
+        }
+        Err(_) => {
+            println!("Daemon Status: Not Running");
+        }
+    }
     Ok(())
 }
 
 async fn stop_daemon() -> Result<()> {
-    println!("Stop command received");
-    println!("TODO: Implement D-Bus stop signal");
+    let connection = zbus::Connection::session().await
+        .context("Failed to connect to D-Bus session bus")?;
+
+    match connection
+        .call_method(
+            Some("org.jasper.Daemon"),
+            "/org/jasper/Daemon",
+            Some("org.jasper.Daemon1"),
+            "GetStatus",
+            &(),
+        )
+        .await
+    {
+        Ok(_) => {
+            println!("Daemon is running. Use 'systemctl --user stop jasper-daemon' or send SIGTERM.");
+        }
+        Err(_) => {
+            println!("Daemon is not running.");
+        }
+    }
     Ok(())
 }
 
