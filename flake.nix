@@ -145,11 +145,43 @@
           passthru.extensionUuid = "jasper-dev-v3@tom.local";
         };
         
+        # COSMIC panel applet
+        packages.cosmic-applet = pkgs.callPackage ./nix/cosmic-applet.nix {};
+
         # Unified package with desktop environment detection and auto-integration
         packages.default = pkgs.callPackage ./nix/unified-package.nix {
           inherit system;
           jasperDaemon = self.packages.${system}.daemon;
           jasperGnomeExtension = self.packages.${system}.gnome-extension;
+          jasperCosmicApplet = self.packages.${system}.cosmic-applet;
+        };
+
+        # Development shell with COSMIC dependencies
+        devShells.cosmic = pkgs.mkShell {
+          inputsFrom = [ self.devShells.${system}.default ];
+
+          buildInputs = with pkgs; [
+            wayland
+            libxkbcommon
+            vulkan-loader
+            fontconfig
+            freetype
+            libinput
+            glib
+          ];
+
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
+            wayland
+            libxkbcommon
+            vulkan-loader
+            fontconfig
+            freetype
+          ]);
+
+          shellHook = ''
+            echo "Jasper COSMIC Development Environment"
+            echo "Includes Wayland + libcosmic dependencies"
+          '';
         };
       });
 }

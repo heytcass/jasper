@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Jasper AI Insights
+Comment=AI-generated calendar insights for the COSMIC panel
+Exec=jasper-cosmic-applet
+Icon=calendar-symbolic
+Terminal=false
+NoDisplay=true
+X-CosmicApplet=true
+Categories=Office;Utility;

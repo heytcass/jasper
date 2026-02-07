@@ -6,6 +6,7 @@
 , system
 , jasperDaemon ? pkgs.callPackage ../daemon { }
 , jasperGnomeExtension ? pkgs.callPackage ./gnome-extension.nix { }
+, jasperCosmicApplet ? null
 , writeShellScript
 , symlinkJoin
 }:
@@ -41,6 +42,8 @@ let
     pgrep -l plasmashell && echo "  - KDE Plasma: Running" || echo "  - KDE Plasma: Not running"
     pgrep -l sway && echo "  - Sway: Running" || echo "  - Sway: Not running"
     pgrep -l Hyprland && echo "  - Hyprland: Running" || echo "  - Hyprland: Not running"
+    pgrep -l cosmic-panel && echo "  - COSMIC Panel: Running" || echo "  - COSMIC Panel: Not running"
+    pgrep -l cosmic-comp && echo "  - COSMIC Compositor: Running" || echo "  - COSMIC Compositor: Not running"
     
     # Configuration detection
     echo "Available Configurations:"
@@ -122,7 +125,7 @@ symlinkJoin {
     jasperGnomeExtension  # Always include, activation is conditional
     dbusServiceFile
     desktopEntry
-  ];
+  ] ++ lib.optionals (jasperCosmicApplet != null) [ jasperCosmicApplet ];
   
   nativeBuildInputs = [ pkgs.makeWrapper ];
   
@@ -184,6 +187,7 @@ This package includes desktop environment detection and automatic integration.
 
 Supported Frontends:
 - GNOME Shell Extension (auto-activated on GNOME)
+- COSMIC Panel Applet (auto-included when available)
 - Waybar Integration (JSON output)
 - D-Bus Notifications (cross-desktop)
 - Terminal Interface (always available)
@@ -207,12 +211,14 @@ EOF
     # Expose component packages for advanced users
     daemon = jasperDaemon;
     gnomeExtension = jasperGnomeExtension;
-    
+    cosmicApplet = jasperCosmicApplet;
+
     # Desktop detection capabilities
     supportsGnome = true;
     supportsWaybar = true;
+    supportsCosmic = jasperCosmicApplet != null;
     supportsKde = false; # Future enhancement
-    
+
     # Extension UUID for NixOS module integration
     extensionUuid = jasperGnomeExtension.passthru.extensionUuid or "jasper@tom.local";
   };

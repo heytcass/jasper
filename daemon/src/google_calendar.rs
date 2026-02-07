@@ -187,7 +187,7 @@ impl GoogleCalendarService {
     }
 
     /// Fetch events from Google Calendar using direct REST API
-    pub async fn fetch_events(&mut self, start_time: DateTime<Utc>, end_time: DateTime<Utc>) -> Result<Vec<(String, Vec<Event>)>> {
+    pub async fn fetch_events(&self, start_time: DateTime<Utc>, end_time: DateTime<Utc>) -> Result<Vec<(String, Vec<Event>)>> {
         let token = self.get_valid_token().await?;
         let mut events_by_calendar = Vec::new();
 
@@ -410,7 +410,7 @@ impl GoogleCalendarService {
     }
 
     /// Get calendar metadata for database storage
-    pub async fn get_calendar_metadata(&mut self, calendar_id: &str) -> Result<(String, String, Option<String>)> {
+    pub async fn get_calendar_metadata(&self, calendar_id: &str) -> Result<(String, String, Option<String>)> {
         let token = self.get_valid_token().await?;
 
         let response = self.http_client
@@ -431,7 +431,7 @@ impl GoogleCalendarService {
     }
 
     /// Get calendar list for configuration using direct REST API
-    pub async fn list_calendars(&mut self) -> Result<Vec<(String, String)>> {
+    pub async fn list_calendars(&self) -> Result<Vec<(String, String)>> {
         let token = self.get_valid_token().await?;
 
         let response = self.http_client
