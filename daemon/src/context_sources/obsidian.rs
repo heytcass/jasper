@@ -5,13 +5,35 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::fs as async_fs;
 use tracing::{debug, info, warn};
 
+/// Pre-compiled regexes used across obsidian parsing (compiled once, reused)
+struct ObsidianRegexes {
+    frontmatter: Regex,
+    task: Regex,
+    item: Regex,
+    focus_patterns: Vec<Regex>,
+}
+
+fn obsidian_regexes() -> &'static ObsidianRegexes {
+    static REGEXES: OnceLock<ObsidianRegexes> = OnceLock::new();
+    REGEXES.get_or_init(|| ObsidianRegexes {
+        frontmatter: Regex::new(r"^---\n(.*?)\n---\n(.*)$").unwrap(),
+        task: Regex::new(r"^\s*- \[([ x])\] (.+)$").unwrap(),
+        item: Regex::new(r"^\s*[-*]\s+(.+)$").unwrap(),
+        focus_patterns: vec![
+            Regex::new(r"## Focus(?:\s+Areas?)?\s*\n(.*?)(?:\n##|$)").unwrap(),
+            Regex::new(r"## Today's Focus\s*\n(.*?)(?:\n##|$)").unwrap(),
+            Regex::new(r"## Priorities\s*\n(.*?)(?:\n##|$)").unwrap(),
+        ],
+    })
+}
+
 use super::{
     ContextSource, ContextData, ContextDataType, ContextContent, NotesContext,
-    Task, TaskStatus, Project, ProjectStatus, Activity, ActivityType,
-    RelationshipAlert, RelationshipType, DailyNote
+    Task, TaskStatus, Project, ProjectStatus, DailyNote
 };
 
 /// Obsidian vault context source
@@ -57,22 +79,15 @@ impl Default for ObsidianConfig {
     }
 }
 
-/// Frontmatter data from Obsidian notes
+/// Frontmatter data from Obsidian notes (project-relevant fields only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrontMatter {
     pub name: Option<String>,
-    pub company: Option<String>,
-    pub role: Option<String>,
-    pub email: Option<String>,
-    pub phone: Option<String>,
-    pub last_contact: Option<NaiveDate>,
-    pub relationship: Option<String>,
     pub status: Option<String>,
     pub due_date: Option<NaiveDate>,
     pub priority: Option<i32>,
     pub client: Option<String>,
     pub progress: Option<f32>,
-    pub tags: Option<Vec<String>>,
     pub other: HashMap<String, serde_yaml::Value>,
 }
 
@@ -100,9 +115,9 @@ impl ObsidianVaultSource {
     
     /// Parse frontmatter from a markdown file
     fn parse_frontmatter(content: &str) -> Result<(Option<FrontMatter>, String)> {
-        let frontmatter_regex = Regex::new(r"^---\n(.*?)\n---\n(.*)$")?;
-        
-        if let Some(captures) = frontmatter_regex.captures(content) {
+        let re = &obsidian_regexes().frontmatter;
+
+        if let Some(captures) = re.captures(content) {
             let yaml_content = captures.get(1)
                 .ok_or_else(|| anyhow!("Failed to extract YAML content from frontmatter"))?
                 .as_str();
@@ -114,14 +129,6 @@ impl ObsidianVaultSource {
                 Ok(yaml_map) => {
                     let frontmatter = FrontMatter {
                         name: yaml_map.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        company: yaml_map.get("company").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        role: yaml_map.get("role").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        email: yaml_map.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        phone: yaml_map.get("phone").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        last_contact: yaml_map.get("last_contact")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
-                        relationship: yaml_map.get("relationship").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         status: yaml_map.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         due_date: yaml_map.get("due_date")
                             .and_then(|v| v.as_str())
@@ -129,9 +136,6 @@ impl ObsidianVaultSource {
                         priority: yaml_map.get("priority").and_then(|v| v.as_i64()).map(|i| i as i32),
                         client: yaml_map.get("client").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         progress: yaml_map.get("progress").and_then(|v| v.as_f64()).map(|f| f as f32),
-                        tags: yaml_map.get("tags")
-                            .and_then(|v| v.as_sequence())
-                            .map(|seq| seq.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()),
                         other: yaml_map,
                     };
                     
@@ -150,9 +154,8 @@ impl ObsidianVaultSource {
     /// Extract tasks from markdown content
     fn extract_tasks(content: &str, file_path: &Path) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
-        let task_regex = Regex::new(r"^\s*- \[([ x])\] (.+)$")
-            .map_err(|e| anyhow!("Failed to compile task regex: {}", e))?;
-        
+        let task_regex = &obsidian_regexes().task;
+
         for (line_num, line) in content.lines().enumerate() {
             if let Some(captures) = task_regex.captures(line) {
                 let is_completed = captures.get(1)
@@ -244,35 +247,24 @@ impl ObsidianVaultSource {
     /// Extract focus areas from content
     fn extract_focus_areas(&self, content: &str) -> Result<Vec<String>> {
         let mut focus_areas = Vec::new();
-        
-        // Look for common focus area patterns
-        let focus_patterns = vec![
-            r"## Focus(?:\s+Areas?)?\s*\n(.*?)(?:\n##|$)",
-            r"## Today's Focus\s*\n(.*?)(?:\n##|$)",
-            r"## Priorities\s*\n(.*?)(?:\n##|$)",
-        ];
-        
-        for pattern in focus_patterns {
-            if let Ok(regex) = Regex::new(pattern) {
-                if let Some(captures) = regex.captures(content) {
-                    let focus_text = captures.get(1)
-                        .ok_or_else(|| anyhow!("Failed to extract focus text from line"))?
-                        .as_str();
-                    // Extract list items
-                    let item_regex = Regex::new(r"^\s*[-*]\s+(.+)$")
-                        .map_err(|e| anyhow!("Failed to compile item regex: {}", e))?;
-                    for line in focus_text.lines() {
-                        if let Some(item_captures) = item_regex.captures(line) {
-                            let item = item_captures.get(1)
-                                .ok_or_else(|| anyhow!("Failed to extract item text from line"))?
-                                .as_str();
-                            focus_areas.push(item.to_string());
-                        }
+        let regexes = obsidian_regexes();
+
+        for regex in &regexes.focus_patterns {
+            if let Some(captures) = regex.captures(content) {
+                let focus_text = captures.get(1)
+                    .ok_or_else(|| anyhow!("Failed to extract focus text from line"))?
+                    .as_str();
+                for line in focus_text.lines() {
+                    if let Some(item_captures) = regexes.item.captures(line) {
+                        let item = item_captures.get(1)
+                            .ok_or_else(|| anyhow!("Failed to extract item text from line"))?
+                            .as_str();
+                        focus_areas.push(item.to_string());
                     }
                 }
             }
         }
-        
+
         Ok(focus_areas)
     }
     
@@ -334,127 +326,6 @@ impl ObsidianVaultSource {
         Ok(projects)
     }
     
-    /// Get relationship alerts
-    async fn get_relationship_alerts(&self) -> Result<Vec<RelationshipAlert>> {
-        let mut alerts = Vec::new();
-        let people_path = self.vault_path.join(&self.config.people_folder);
-        
-        if !people_path.exists() {
-            debug!("People folder does not exist: {:?}", people_path);
-            return Ok(alerts);
-        }
-        
-        let mut entries = async_fs::read_dir(&people_path).await?;
-        let now = Utc::now();
-        
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "md") {
-                match async_fs::read_to_string(&path).await {
-                    Ok(content) => {
-                        let (frontmatter, _) = Self::parse_frontmatter(&content)?;
-                        
-                        if let Some(fm) = frontmatter {
-                            if let Some(last_contact) = fm.last_contact {
-                                if let Some(last_contact_utc) = last_contact.and_hms_opt(12, 0, 0).map(|dt| dt.and_utc()) {
-                                    let days_since = now.signed_duration_since(last_contact_utc).num_days();
-                                
-                                if days_since > self.config.relationship_alert_days {
-                                    let relationship_type = match fm.relationship.as_deref() {
-                                        Some("professional") => RelationshipType::Professional,
-                                        Some("personal") => RelationshipType::Personal,
-                                        Some("client") => RelationshipType::Client,
-                                        Some("vendor") => RelationshipType::Vendor,
-                                        Some("family") => RelationshipType::Family,
-                                        Some("friend") => RelationshipType::Friend,
-                                        Some(other) => RelationshipType::Other(other.to_string()),
-                                        None => RelationshipType::Professional, // Default
-                                    };
-                                    
-                                    let urgency = match days_since {
-                                        30.. => 8,
-                                        21..=29 => 6,
-                                        14..=20 => 4,
-                                        _ => 2,
-                                    };
-                                    
-                                    alerts.push(RelationshipAlert {
-                                        person_name: fm.name.unwrap_or_else(|| {
-                                            path.file_stem().unwrap_or_default().to_string_lossy().to_string()
-                                        }),
-                                        company: fm.company,
-                                        last_contact: last_contact_utc,
-                                        days_since_contact: days_since,
-                                        relationship_type,
-                                        urgency,
-                                    });
-                                }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to read person file {:?}: {}", path, e);
-                    }
-                }
-            }
-        }
-        
-        // Sort by urgency (higher first)
-        alerts.sort_by(|a, b| b.urgency.cmp(&a.urgency));
-        
-        Ok(alerts)
-    }
-    
-    /// Get recent activities
-    async fn get_recent_activities(&self, start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Activity>> {
-        let mut activities = Vec::new();
-        
-        // For now, we'll extract activities from recent daily notes
-        let recent_daily_notes = self.get_daily_notes(start, Utc::now()).await?;
-        
-        for daily_note in recent_daily_notes {
-            // Extract meeting references and activities from daily note content
-            let meeting_regex = Regex::new(r"(?i)meeting\s+with\s+([^.]+)")
-                .map_err(|e| anyhow!("Failed to compile meeting regex: {}", e))?;
-            let call_regex = Regex::new(r"(?i)call\s+with\s+([^.]+)")
-                .map_err(|e| anyhow!("Failed to compile call regex: {}", e))?;
-            
-            for (line_num, line) in daily_note.content.lines().enumerate() {
-                if let Some(captures) = meeting_regex.captures(line) {
-                    if let Some(person_match) = captures.get(1) {
-                        let person = person_match.as_str();
-                    activities.push(Activity {
-                        id: format!("{}:meeting:{}", daily_note.date.format("%Y-%m-%d"), line_num),
-                        title: format!("Meeting with {}", person),
-                        description: Some(line.to_string()),
-                        timestamp: daily_note.date,
-                        activity_type: ActivityType::Meeting,
-                        duration: None,
-                        outcome: None,
-                    });
-                    }
-                }
-                
-                if let Some(captures) = call_regex.captures(line) {
-                    if let Some(person_match) = captures.get(1) {
-                        let person = person_match.as_str();
-                    activities.push(Activity {
-                        id: format!("{}:call:{}", daily_note.date.format("%Y-%m-%d"), line_num),
-                        title: format!("Call with {}", person),
-                        description: Some(line.to_string()),
-                        timestamp: daily_note.date,
-                        activity_type: ActivityType::Call,
-                        duration: None,
-                        outcome: None,
-                    });
-                    }
-                }
-            }
-        }
-        
-        Ok(activities)
-    }
 }
 
 #[async_trait]
@@ -473,12 +344,10 @@ impl ContextSource for ObsidianVaultSource {
     
     async fn fetch_context(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<ContextData> {
         info!("Fetching context from Obsidian vault: {:?}", self.vault_path);
-        
+
         let daily_notes = self.get_daily_notes(start, end).await?;
         let active_projects = self.get_active_projects().await?;
-        let relationship_alerts = self.get_relationship_alerts().await?;
-        let recent_activities = self.get_recent_activities(start, end).await?;
-        
+
         // Extract all tasks from daily notes and projects
         let mut all_tasks = Vec::new();
         for note in &daily_notes {
@@ -487,13 +356,11 @@ impl ContextSource for ObsidianVaultSource {
         for project in &active_projects {
             all_tasks.extend(project.tasks.clone());
         }
-        
+
         let notes_context = NotesContext {
             daily_notes,
             active_projects,
-            recent_activities,
             pending_tasks: all_tasks.into_iter().filter(|t| matches!(t.status, TaskStatus::Pending)).collect(),
-            relationship_alerts,
         };
         
         Ok(ContextData {

@@ -66,18 +66,7 @@ pub struct AiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InsightsConfig {
-    /// What types of insights do you want?
-    pub enable_travel_prep: bool,
-    pub enable_maintenance_conflicts: bool,
-    pub enable_overcommitment_warnings: bool,
-    pub enable_pattern_observations: bool,
-    
-    /// Urgency thresholds
-    pub high_urgency_days: u32,
-    pub medium_urgency_days: u32,
-    
-    /// Insight delivery
-    pub max_insights_per_day: u32,
+    /// Don't generate insights during sleep hours
     pub quiet_hours_start: String,
     pub quiet_hours_end: String,
 }
@@ -185,19 +174,12 @@ impl Default for Config {
             },
             ai: AiConfig {
                 provider: "anthropic".to_string(),
-                model: "claude-sonnet-4-20250514".to_string(),
+                model: "claude-sonnet-4-5".to_string(),
                 max_tokens: 2000,
                 temperature: 0.7,
                 api_key: None, // Falls back to ANTHROPIC_API_KEY environment variable
             },
             insights: InsightsConfig {
-                enable_travel_prep: true,
-                enable_maintenance_conflicts: true,
-                enable_overcommitment_warnings: true,
-                enable_pattern_observations: true,
-                high_urgency_days: 2,
-                medium_urgency_days: 5,
-                max_insights_per_day: 10,
                 quiet_hours_start: "22:00".to_string(),
                 quiet_hours_end: "08:00".to_string(),
             },
@@ -657,21 +639,6 @@ impl Config {
         if quiet_start == quiet_end {
             warn!("Quiet hours start and end are the same ({}). This effectively disables all insights.", 
                   self.insights.quiet_hours_start);
-        }
-        
-        // Validate insights frequency
-        if self.insights.max_insights_per_day == 0 {
-            return Err(anyhow::anyhow!("max_insights_per_day must be at least 1"));
-        }
-        if self.insights.max_insights_per_day > 100 {
-            return Err(anyhow::anyhow!(
-                "max_insights_per_day ({}) is unreasonably high. Consider a lower value to avoid notification fatigue.", 
-                self.insights.max_insights_per_day
-            ));
-        }
-        if self.insights.max_insights_per_day > 20 {
-            warn!("High insights frequency ({}/day) may cause notification fatigue", 
-                  self.insights.max_insights_per_day);
         }
         
         Ok(())

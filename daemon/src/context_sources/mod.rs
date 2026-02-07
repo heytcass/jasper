@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod obsidian;
-pub mod calendar;
 pub mod weather;
 pub mod tasks;
 
@@ -66,12 +65,6 @@ pub enum ContextDataType {
     Tasks,
     Notes,
     Weather,
-    Traffic,
-    Health,
-    Financial,
-    Social,
-    Learning,
-    Other(String),
 }
 
 /// Content payload for context data
@@ -81,7 +74,6 @@ pub enum ContextContent {
     Tasks(TaskContext),
     Notes(NotesContext),
     Weather(WeatherContext),
-    Generic(GenericContext),
 }
 
 /// Calendar-specific context
@@ -105,9 +97,7 @@ pub struct TaskContext {
 pub struct NotesContext {
     pub daily_notes: Vec<DailyNote>,
     pub active_projects: Vec<Project>,
-    pub recent_activities: Vec<Activity>,
     pub pending_tasks: Vec<Task>,
-    pub relationship_alerts: Vec<RelationshipAlert>,
 }
 
 /// Weather-specific context
@@ -116,14 +106,6 @@ pub struct WeatherContext {
     pub current_conditions: String,
     pub forecast: Vec<WeatherForecast>,
     pub alerts: Vec<String>,
-}
-
-/// Generic context for extensibility
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenericContext {
-    pub data: HashMap<String, serde_json::Value>,
-    pub summary: String,
-    pub insights: Vec<String>,
 }
 
 /// Task representation
@@ -185,54 +167,6 @@ pub enum ProjectStatus {
     Cancelled,
 }
 
-/// Activity representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Activity {
-    pub id: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub timestamp: DateTime<Utc>,
-    pub activity_type: ActivityType,
-    pub duration: Option<i64>, // minutes
-    pub outcome: Option<String>,
-}
-
-/// Activity type
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ActivityType {
-    Meeting,
-    Call,
-    Email,
-    Work,
-    Learning,
-    Personal,
-    Travel,
-    Other(String),
-}
-
-/// Relationship alert
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelationshipAlert {
-    pub person_name: String,
-    pub company: Option<String>,
-    pub last_contact: DateTime<Utc>,
-    pub days_since_contact: i64,
-    pub relationship_type: RelationshipType,
-    pub urgency: i32,
-}
-
-/// Relationship type
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RelationshipType {
-    Professional,
-    Personal,
-    Client,
-    Vendor,
-    Family,
-    Friend,
-    Other(String),
-}
-
 /// Weather forecast
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherForecast {
@@ -290,23 +224,6 @@ impl ContextSourceManager {
         Ok(all_context)
     }
     
-    /// Get context source by ID
-    pub fn get_source(&self, source_id: &str) -> Option<&dyn ContextSource> {
-        self.sources
-            .iter()
-            .find(|s| s.source_id() == source_id)
-            .map(|s| s.as_ref())
-    }
-    
-    /// Validate all source configurations
-    pub fn validate_configurations(&self, config: &HashMap<String, HashMap<String, String>>) -> Result<()> {
-        for source in &self.sources {
-            if let Some(source_config) = config.get(source.source_id()) {
-                source.validate_config(source_config)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Default for ContextSourceManager {
