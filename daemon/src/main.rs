@@ -22,6 +22,8 @@ use database::DatabaseInner;
 use new_daemon_core::SimplifiedDaemonCore;
 use new_dbus_service::SimplifiedDbusService;
 use context_sources::ContextSourceManager;
+use context_sources::weather::WeatherContextSource;
+use google_calendar::GoogleCalendarService;
 use api_manager::ApiManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -93,15 +95,51 @@ async fn start_daemon() -> Result<()> {
         .context("Failed to initialize database")?;
 
     // Initialize context source manager
-    let context_manager = ContextSourceManager::new();
-    // TODO: Add actual context sources here when needed
+    let mut context_manager = ContextSourceManager::new();
+
+    // Register weather context source if configured
+    {
+        let config = config_arc.read();
+        if let Some(weather_config) = config.get_weather_config() {
+            if weather_config.enabled && !weather_config.api_key.is_empty() {
+                let weather_source = WeatherContextSource::with_config(
+                    Some(weather_config.api_key.clone()),
+                    weather_config.location.clone(),
+                    weather_config.units.clone(),
+                    weather_config.cache_duration_minutes,
+                );
+                context_manager.add_source(Box::new(weather_source));
+                info!("Weather context source registered for {}", weather_config.location);
+            }
+        }
+    }
+
+    // Initialize Google Calendar service if configured
+    let calendar_service = {
+        let config = config_arc.read();
+        config.google_calendar.as_ref().and_then(|gc| {
+            if gc.enabled && !gc.client_id.is_empty() && !gc.client_secret.is_empty() {
+                let gcal_config = google_calendar::GoogleCalendarConfig {
+                    client_id: gc.client_id.clone(),
+                    client_secret: gc.client_secret.clone(),
+                    redirect_uri: gc.redirect_uri.clone(),
+                    calendar_ids: gc.calendar_ids.clone(),
+                };
+                let data_dir = Config::get_data_dir().ok()?;
+                info!("Google Calendar service initialized");
+                Some(GoogleCalendarService::new(gcal_config, data_dir))
+            } else {
+                None
+            }
+        })
+    };
 
     // Initialize API manager
     let api_manager = ApiManager::new();
 
     // Create the simplified daemon core
     let daemon_core = Arc::new(RwLock::new(
-        SimplifiedDaemonCore::new(database, context_manager, api_manager, config_arc)
+        SimplifiedDaemonCore::new(database, context_manager, api_manager, config_arc, calendar_service)
     ));
     
     info!("Simplified daemon core created");

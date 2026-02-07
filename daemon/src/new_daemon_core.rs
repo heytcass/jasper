@@ -4,6 +4,7 @@ use crate::significance_engine::{SignificanceEngine, ContextSnapshot as ContextS
 use crate::context_sources::ContextSourceManager;
 use crate::api_manager::ApiManager;
 use crate::config::Config;
+use crate::google_calendar::GoogleCalendarService;
 use crate::new_dbus_service::DbusSignalEmitter;
 
 use std::sync::Arc;
@@ -45,6 +46,11 @@ pub struct SimplifiedDaemonCore {
     api_manager: ApiManager,
     config: Arc<parking_lot::RwLock<Config>>,
 
+    // Google Calendar sync
+    calendar_service: Option<Arc<GoogleCalendarService>>,
+    last_calendar_sync: Arc<RwLock<Option<DateTime<Utc>>>>,
+    calendar_sync_interval: Duration,
+
     // Configuration
     check_interval: Duration,
 
@@ -61,13 +67,25 @@ impl SimplifiedDaemonCore {
         context_manager: ContextSourceManager,
         api_manager: ApiManager,
         config: Arc<parking_lot::RwLock<Config>>,
+        calendar_service: Option<GoogleCalendarService>,
     ) -> Self {
+        let calendar_sync_interval = {
+            let cfg = config.read();
+            let minutes = cfg.google_calendar.as_ref()
+                .map(|gc| gc.sync_interval_minutes)
+                .unwrap_or(15);
+            Duration::from_secs(minutes as u64 * 60)
+        };
+
         Self {
             database,
             significance_engine: SignificanceEngine::new(),
             context_manager: Arc::new(tokio::sync::RwLock::new(context_manager)),
             api_manager,
             config,
+            calendar_service: calendar_service.map(Arc::new),
+            last_calendar_sync: Arc::new(RwLock::new(None)),
+            calendar_sync_interval,
             check_interval: Duration::from_secs(60), // Check every minute
             is_running: Arc::new(RwLock::new(false)),
             signal_emitter: Arc::new(tokio::sync::RwLock::new(None)),
@@ -157,6 +175,12 @@ impl SimplifiedDaemonCore {
 
             ticker.tick().await;
 
+            // Sync Google Calendar events if interval has elapsed
+            {
+                let d = daemon.read().await;
+                d.sync_calendar_if_needed().await;
+            }
+
             // Perform context check and analysis (this acquires locks internally as needed)
             {
                 let d = daemon.read().await;
@@ -183,6 +207,89 @@ impl SimplifiedDaemonCore {
         info!("Stopping daemon");
         let mut running = self.is_running.write();
         *running = false;
+    }
+
+    /// Sync Google Calendar events if the sync interval has elapsed
+    async fn sync_calendar_if_needed(&self) {
+        let calendar_service = match &self.calendar_service {
+            Some(svc) => svc.clone(),
+            None => return,
+        };
+
+        // Check if sync interval has elapsed
+        {
+            let last_sync = self.last_calendar_sync.read();
+            if let Some(last) = *last_sync {
+                if Utc::now() - last < chrono::Duration::from_std(self.calendar_sync_interval).unwrap_or(chrono::Duration::minutes(15)) {
+                    return;
+                }
+            }
+        }
+
+        // Check if authenticated
+        if !calendar_service.is_authenticated().await {
+            debug!("Google Calendar not authenticated, skipping sync");
+            return;
+        }
+
+        info!("Starting Google Calendar sync");
+
+        let now = Utc::now();
+        let planning_horizon = self.config.read().get_planning_horizon();
+        let end_time = now + planning_horizon;
+
+        match calendar_service.fetch_events(now, end_time).await {
+            Ok(events_by_calendar) => {
+                let mut total_events = 0usize;
+
+                for (google_calendar_id, events) in &events_by_calendar {
+                    // Ensure calendar exists in DB and get its DB id
+                    let calendar_name = google_calendar_id.clone();
+                    let db_calendar_id = match self.database.create_or_update_calendar(
+                        google_calendar_id,
+                        &calendar_name,
+                        Some("google_calendar"),
+                    ) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            warn!("Failed to create/update calendar {}: {}", google_calendar_id, e);
+                            continue;
+                        }
+                    };
+
+                    // Delete old events for this calendar then bulk-insert fresh ones
+                    if let Err(e) = self.database.delete_events_for_calendar(db_calendar_id) {
+                        warn!("Failed to delete old events for calendar {}: {}", google_calendar_id, e);
+                        continue;
+                    }
+
+                    // Set the calendar_id on each event before inserting
+                    let events_with_cal_id: Vec<_> = events.iter().map(|e| {
+                        let mut ev = e.clone();
+                        ev.calendar_id = db_calendar_id;
+                        ev
+                    }).collect();
+
+                    match self.database.create_events_bulk(&events_with_cal_id) {
+                        Ok(ids) => {
+                            total_events += ids.len();
+                            debug!("Synced {} events for calendar {}", ids.len(), google_calendar_id);
+                        }
+                        Err(e) => {
+                            warn!("Failed to insert events for calendar {}: {}", google_calendar_id, e);
+                        }
+                    }
+                }
+
+                info!("Google Calendar sync complete: {} events", total_events);
+
+                // Update last sync timestamp
+                *self.last_calendar_sync.write() = Some(Utc::now());
+            }
+            Err(e) => {
+                warn!("Google Calendar sync failed: {}", e);
+            }
+        }
     }
 
     /// Check context for changes and analyze if significant

@@ -699,6 +699,17 @@ impl DatabaseInner {
 
 
     
+    /// Delete all events for a given calendar database ID (used during sync refresh)
+    pub fn delete_events_for_calendar(&self, calendar_db_id: i64) -> JasperResult<usize> {
+        self.with_connection_retry(|conn| {
+            let count = conn.execute(
+                "DELETE FROM events WHERE calendar_id = ?",
+                params![calendar_db_id],
+            )?;
+            Ok(count)
+        })
+    }
+
     /// Delete test events from the database (for cleanup operations)
     pub fn delete_test_events(&self) -> JasperResult<usize> {
         let conn = self.connection.lock();
