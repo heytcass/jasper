@@ -762,11 +762,7 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
 
         let user_message = context_parts.join("\n");
 
-        let (_, model, _max_tokens) = {
-            let cfg = self.config.read();
-            let (_, model, max_tokens, _) = cfg.get_api_config();
-            ((), model, max_tokens)
-        };
+        let model = self.config.read().ai.model.clone();
 
         Ok(serde_json::json!({
             "model": model,

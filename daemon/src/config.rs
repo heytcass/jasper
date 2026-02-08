@@ -3,7 +3,6 @@
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::fs;
@@ -18,12 +17,9 @@ use crate::sops_integration::SopsSecrets;
 pub struct Config {
     pub general: GeneralConfig,
     pub ai: AiConfig,
-    pub insights: InsightsConfig,
     pub personality: PersonalityConfig,
     pub google_calendar: Option<GoogleCalendarConfig>,
-    pub calendar_owners: Option<HashMap<String, String>>,
     pub context_sources: Option<ContextSourcesConfig>,
-    pub notifications: Option<NotificationConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,35 +36,16 @@ pub struct GoogleCalendarConfig {
 pub struct GeneralConfig {
     /// How far ahead should Jasper look?
     pub planning_horizon_days: u32,
-    /// How often to check for new correlations (minutes)
-    pub analysis_interval: u32,
-    /// Daemon behavior
-    pub auto_start: bool,
-    /// Log level
-    pub log_level: String,
     /// Timezone for displaying events
     pub timezone: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
-    /// LLM provider: "openai", "anthropic"
-    pub provider: String,
     /// Model name
     pub model: String,
-    /// Maximum tokens for LLM responses
-    pub max_tokens: u32,
-    /// Temperature for LLM
-    pub temperature: f32,
     /// API key for the AI provider (optional - falls back to environment variable)
     pub api_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InsightsConfig {
-    /// Don't generate insights during sleep hours
-    pub quiet_hours_start: String,
-    pub quiet_hours_end: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,38 +54,22 @@ pub struct PersonalityConfig {
     pub user_title: String,
     /// Formality level: "formal", "balanced", "casual"
     pub formality: String,
-    /// Humor level: "none", "occasional", "frequent"
-    pub humor_level: String,
     /// Assistant persona description
     pub assistant_persona: String,
     /// Optional persona reference for personality (e.g., "like Alfred from Batman")
     pub persona_reference: Option<String>,
-    /// Term to use for childcare helper availability (e.g., "Helper Day", "Nanny Day")
-    pub childcare_helper_term: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSourcesConfig {
     pub obsidian: Option<ObsidianConfig>,
     pub weather: Option<WeatherConfig>,
-    pub tasks: Option<TasksConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObsidianConfig {
     pub enabled: bool,
     pub vault_path: String,
-    pub daily_notes_folder: String,
-    pub daily_notes_format: String,
-    pub templates_folder: String,
-    pub people_folder: String,
-    pub projects_folder: String,
-    pub parse_dataview: bool,
-    pub parse_tasks: bool,
-    pub parse_frontmatter: bool,
-    pub relationship_alert_days: i64,
-    pub ignored_folders: Vec<String>,
-    pub ignored_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,76 +81,23 @@ pub struct WeatherConfig {
     pub cache_duration_minutes: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TasksConfig {
-    pub enabled: bool,
-    pub source_type: String, // "todoist", "local_file", "obsidian"
-    pub api_key: Option<String>,
-    pub file_path: Option<String>,
-    pub sync_completed: bool,
-    pub max_tasks: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NotificationConfig {
-    pub enabled: bool,
-    pub notify_new_insights: bool,
-    pub notify_context_changes: bool,
-    pub notify_cache_refresh: bool,
-    pub notification_timeout: u32, // milliseconds
-    pub min_urgency_threshold: i32, // minimum urgency score to notify
-    /// Notification method preference (auto, dbus, notify-send)
-    #[serde(default = "default_notification_method")]
-    pub preferred_method: String,
-    /// Application name for notifications
-    #[serde(default = "default_app_name")]
-    pub app_name: String,
-    /// Custom desktop entry name for better integration
-    #[serde(default = "default_desktop_entry")]
-    pub desktop_entry: String,
-}
-
-// Default functions for notification configuration
-fn default_notification_method() -> String {
-    "auto".to_string()
-}
-
-fn default_app_name() -> String {
-    "Jasper".to_string()
-}
-
-fn default_desktop_entry() -> String {
-    "jasper".to_string()
-}
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             general: GeneralConfig {
                 planning_horizon_days: 7,
-                analysis_interval: 30,
-                auto_start: true,
-                log_level: "info".to_string(),
                 timezone: "America/Detroit".to_string(),
             },
             ai: AiConfig {
-                provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-5".to_string(),
-                max_tokens: 2000,
-                temperature: 0.7,
                 api_key: None, // Falls back to ANTHROPIC_API_KEY environment variable
-            },
-            insights: InsightsConfig {
-                quiet_hours_start: "22:00".to_string(),
-                quiet_hours_end: "08:00".to_string(),
             },
             personality: PersonalityConfig {
                 user_title: "Tom".to_string(),
                 formality: "balanced".to_string(),
-                humor_level: "occasional".to_string(),
                 assistant_persona: "trusted family assistant".to_string(),
                 persona_reference: Some("like Alfred from Batman".to_string()),
-                childcare_helper_term: "Helper Day".to_string(),
             },
             google_calendar: Some(GoogleCalendarConfig {
                 enabled: false, // Disabled by default, user must configure
@@ -199,22 +107,10 @@ impl Default for Config {
                 calendar_ids: vec!["primary".to_string()],
                 sync_interval_minutes: 15,
             }),
-            calendar_owners: None,
             context_sources: Some(ContextSourcesConfig {
                 obsidian: Some(ObsidianConfig {
-                    enabled: true,
+                    enabled: false,
                     vault_path: "~/Documents/Obsidian Vault".to_string(),
-                    daily_notes_folder: "Work/Daily".to_string(),
-                    daily_notes_format: "YYYY-MM-DD".to_string(),
-                    templates_folder: "Templates".to_string(),
-                    people_folder: "Work/People".to_string(),
-                    projects_folder: "Work/Projects".to_string(),
-                    parse_dataview: true,
-                    parse_tasks: true,
-                    parse_frontmatter: true,
-                    relationship_alert_days: 21,
-                    ignored_folders: vec![".obsidian".to_string(), ".trash".to_string()],
-                    ignored_files: vec![".DS_Store".to_string()],
                 }),
                 weather: Some(WeatherConfig {
                     enabled: false, // Disabled by default, needs API key
@@ -223,25 +119,6 @@ impl Default for Config {
                     units: "imperial".to_string(),
                     cache_duration_minutes: 30,
                 }),
-                tasks: Some(TasksConfig {
-                    enabled: false, // Disabled by default
-                    source_type: "todoist".to_string(),
-                    api_key: None,
-                    file_path: None,
-                    sync_completed: true,
-                    max_tasks: 100,
-                }),
-            }),
-            notifications: Some(NotificationConfig {
-                enabled: true,
-                notify_new_insights: true,
-                notify_context_changes: false, // Less noisy by default
-                notify_cache_refresh: false,   // Less noisy by default
-                notification_timeout: 5000,    // 5 seconds
-                min_urgency_threshold: 3,      // Medium+ urgency
-                preferred_method: default_notification_method(),
-                app_name: default_app_name(),
-                desktop_entry: default_desktop_entry(),
             }),
         }
     }
@@ -315,16 +192,6 @@ impl Config {
             }
         }
         
-        // Override Todoist API key if present
-        if let Some(todoist_api_key) = secrets.get("todoist_api_key") {
-            debug!("Using Todoist API key from SOPS");
-            if let Some(ref mut context_sources) = self.context_sources {
-                if let Some(ref mut tasks_config) = context_sources.tasks {
-                    tasks_config.api_key = Some(todoist_api_key.clone());
-                }
-            }
-        }
-        
         info!("Applied SOPS secrets to configuration");
     }
     
@@ -372,29 +239,9 @@ impl Config {
         Ok(data_dir)
     }
     
-    pub fn get_calendar_owner(&self, calendar_id: &str) -> Option<String> {
-        self.calendar_owners.as_ref()
-            .and_then(|owners| owners.get(calendar_id))
-            .cloned()
-    }
-    
-    /// Get personality information as a tuple (user_title, formality, timezone)
-    pub fn get_personality_info(&self) -> (String, String, String) {
-        (
-            self.personality.user_title.clone(),
-            self.personality.formality.clone(),
-            self.general.timezone.clone()
-        )
-    }
-    
     /// Get enhanced personality configuration for prompt generation
     pub fn get_personality_config(&self) -> (&PersonalityConfig, &str) {
         (&self.personality, &self.general.timezone)
-    }
-    
-    /// Update calendar owners mapping from discovered calendar information
-    pub fn update_calendar_owners(&mut self, calendar_owners: HashMap<String, String>) {
-        self.calendar_owners = Some(calendar_owners);
     }
     
     /// Get planning horizon as chrono Duration
@@ -406,16 +253,6 @@ impl Config {
     pub fn get_api_key(&self) -> Option<String> {
         self.ai.api_key.clone()
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-    }
-    
-    /// Get API configuration (provider, model, max_tokens, temperature)
-    pub fn get_api_config(&self) -> (String, String, u32, f32) {
-        (
-            self.ai.provider.clone(),
-            self.ai.model.clone(),
-            self.ai.max_tokens,
-            self.ai.temperature
-        )
     }
     
     /// Get timezone as parsed Tz object, falling back to UTC if invalid
@@ -576,71 +413,22 @@ impl Config {
     fn validate_basic_config(&self) -> Result<()> {
         // Validate timezone using helper function
         self.validate_timezone(&self.general.timezone, "general.timezone")?;
-        
+
         // Validate planning horizon with reasonable bounds
         if self.general.planning_horizon_days == 0 {
             return Err(anyhow::anyhow!("Planning horizon must be at least 1 day"));
         }
         if self.general.planning_horizon_days > 365 {
             return Err(anyhow::anyhow!(
-                "Planning horizon cannot exceed 365 days (got: {}). Consider a more reasonable timeframe for performance.", 
+                "Planning horizon cannot exceed 365 days (got: {}). Consider a more reasonable timeframe for performance.",
                 self.general.planning_horizon_days
             ));
         }
         if self.general.planning_horizon_days > 90 {
-            warn!("Planning horizon of {} days is quite large and may impact performance", 
+            warn!("Planning horizon of {} days is quite large and may impact performance",
                   self.general.planning_horizon_days);
         }
-        
-        // Enhanced AI configuration validation
-        if self.ai.temperature < 0.0 || self.ai.temperature > 2.0 {
-            return Err(anyhow::anyhow!(
-                "AI temperature must be between 0.0-2.0 (got: {}). Lower values (0.1-0.7) are recommended for consistent results.", 
-                self.ai.temperature
-            ));
-        }
-        if self.ai.temperature > 1.5 {
-            warn!("High AI temperature ({}) may produce unpredictable results", self.ai.temperature);
-        }
-        
-        // Validate AI max tokens with model-specific limits
-        let max_token_limit = if self.ai.model.contains("gpt-4") {
-            128000 // GPT-4 Turbo limit
-        } else if self.ai.model.contains("claude") {
-            200000 // Claude 3 limit
-        } else {
-            32000 // Conservative default
-        };
-        
-        if self.ai.max_tokens < 100 {
-            return Err(anyhow::anyhow!("AI max_tokens too low ({}). Minimum 100 tokens required for meaningful responses.", self.ai.max_tokens));
-        }
-        if self.ai.max_tokens > max_token_limit {
-            return Err(anyhow::anyhow!(
-                "AI max_tokens ({}) exceeds model limit for '{}' ({})", 
-                self.ai.max_tokens, self.ai.model, max_token_limit
-            ));
-        }
-        
-        // Validate and parse quiet hours with logical consistency
-        let quiet_start = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_start, "%H:%M")
-            .map_err(|_| anyhow::anyhow!(
-                "Invalid quiet_hours_start '{}'. Expected format: HH:MM (24-hour format)", 
-                self.insights.quiet_hours_start
-            ))?;
-        
-        let quiet_end = chrono::NaiveTime::parse_from_str(&self.insights.quiet_hours_end, "%H:%M")
-            .map_err(|_| anyhow::anyhow!(
-                "Invalid quiet_hours_end '{}'. Expected format: HH:MM (24-hour format)", 
-                self.insights.quiet_hours_end
-            ))?;
-        
-        // Check for logical quiet hours (allowing overnight periods)
-        if quiet_start == quiet_end {
-            warn!("Quiet hours start and end are the same ({}). This effectively disables all insights.", 
-                  self.insights.quiet_hours_start);
-        }
-        
+
         Ok(())
     }
     
@@ -810,22 +598,11 @@ impl Config {
         self.context_sources.as_ref()?.weather.as_ref()
     }
     
-    /// Get Tasks configuration
-    pub fn get_tasks_config(&self) -> Option<&TasksConfig> {
-        self.context_sources.as_ref()?.tasks.as_ref()
-    }
-    
-    /// Get Notification configuration
-    pub fn get_notification_config(&self) -> Option<&NotificationConfig> {
-        self.notifications.as_ref()
-    }
-    
     /// Check if a context source is enabled
     pub fn is_context_source_enabled(&self, source_id: &str) -> bool {
         match source_id {
             "obsidian" => self.get_obsidian_config().map_or(false, |c| c.enabled),
             "weather" => self.get_weather_config().map_or(false, |c| c.enabled),
-            "tasks" => self.get_tasks_config().map_or(false, |c| c.enabled),
             "calendar" => true, // Always enabled
             _ => false,
         }
