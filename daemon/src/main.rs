@@ -27,6 +27,7 @@ use google_calendar::GoogleCalendarService;
 use api_manager::ApiManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Parser)]
 #[command(name = "jasper-daemon")]
@@ -57,6 +58,8 @@ enum Commands {
     Waybar,
     /// Check waybar status
     WaybarStatus,
+    /// Authenticate with Google Calendar (OAuth2 flow)
+    AuthGoogle,
 }
 
 #[tokio::main]
@@ -80,6 +83,7 @@ async fn main() -> Result<()> {
         Commands::SetApiKey { key } => set_api_key(key).await,
         Commands::Waybar => waybar_mode().await,
         Commands::WaybarStatus => waybar_status_mode().await,
+        Commands::AuthGoogle => auth_google().await,
     }
 }
 
@@ -266,4 +270,88 @@ async fn waybar_mode() -> Result<()> {
 async fn waybar_status_mode() -> Result<()> {
     waybar_adapter::waybar_status().await
         .map_err(|e| anyhow::anyhow!("Waybar status failed: {}", e))
+}
+
+async fn auth_google() -> Result<()> {
+    let config_arc = Config::load().await.context("Failed to load configuration")?;
+
+    let gc = {
+        let config = config_arc.read();
+        config.google_calendar.as_ref()
+            .filter(|gc| gc.enabled && !gc.client_id.is_empty() && !gc.client_secret.is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Google Calendar is not configured. Set enabled=true, client_id, and client_secret in [google_calendar] section of config.toml"
+            ))?
+    };
+
+    let gcal_config = google_calendar::GoogleCalendarConfig {
+        client_id: gc.client_id,
+        client_secret: gc.client_secret,
+        redirect_uri: gc.redirect_uri.clone(),
+        calendar_ids: gc.calendar_ids,
+    };
+    let data_dir = Config::get_data_dir()?;
+    let service = GoogleCalendarService::new(gcal_config, data_dir);
+
+    // Check if already authenticated
+    if service.is_authenticated().await {
+        println!("Already authenticated with Google Calendar.");
+        println!("To re-authenticate, delete the token file and run this command again:");
+        println!("  rm ~/.local/share/jasper-companion/google_calendar_token.json");
+        return Ok(());
+    }
+
+    let (auth_url, csrf_token) = service.get_auth_url()
+        .context("Failed to generate OAuth URL")?;
+
+    println!("Open this URL in your browser to authorize Jasper:\n");
+    println!("  {}\n", auth_url);
+    println!("Waiting for callback on {} ...", gc.redirect_uri);
+
+    // Try to open the URL automatically
+    let _ = std::process::Command::new("xdg-open").arg(&auth_url).spawn();
+
+    // Start one-shot callback server on 127.0.0.1:8080
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await
+        .context("Failed to bind to 127.0.0.1:8080 - is another process using this port?")?;
+
+    let (mut stream, _addr) = listener.accept().await
+        .context("Failed to accept callback connection")?;
+
+    // Read the HTTP request
+    let mut buf = vec![0u8; 4096];
+    let n = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await
+        .context("Failed to read callback request")?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Parse the request line to extract query params: GET /auth/callback?code=...&state=... HTTP/1.1
+    let code = request.lines().next()
+        .and_then(|line| line.split_whitespace().nth(1))  // "/auth/callback?code=...&state=..."
+        .and_then(|path| path.split('?').nth(1))          // "code=...&state=..."
+        .and_then(|query| {
+            query.split('&')
+                .find_map(|param| param.strip_prefix("code="))
+        })
+        .map(|c| c.to_string())
+        .ok_or_else(|| anyhow::anyhow!("No authorization code found in callback"))?;
+
+    // Send success response to browser
+    let html = "<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        html.len(),
+        html
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.flush().await;
+
+    // Exchange the code for a token
+    println!("Authorization code received, exchanging for token...");
+    service.authenticate_with_code(&code, csrf_token.secret()).await
+        .context("Failed to exchange authorization code for token")?;
+
+    println!("Google Calendar authentication successful!");
+    println!("Token saved. Restart the daemon to begin syncing calendar events.");
+    Ok(())
 }

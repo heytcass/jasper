@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # Async runtime - only the features we actually use
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs", "time", "signal", "sync"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs", "time", "signal", "sync", "net", "io-util"] }
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }

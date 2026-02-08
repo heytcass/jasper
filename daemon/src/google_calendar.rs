@@ -137,7 +137,7 @@ impl GoogleCalendarService {
     }
 
     /// Exchange authorization code for access token
-    pub async fn authenticate_with_code(&mut self, auth_code: &str, _csrf_token: &str) -> Result<()> {
+    pub async fn authenticate_with_code(&self, auth_code: &str, _csrf_token: &str) -> Result<()> {
         debug!("Exchanging authorization code for access token using manual token exchange");
         
         // Manual token exchange to avoid oauth2 crate parsing issues
