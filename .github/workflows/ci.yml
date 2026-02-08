@@ -23,7 +23,7 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           pushFilter: "(-source$|nixpkgs\\.tar\\.gz$)"
 
-      # Cargo checks inside Nix dev shell
+      # Cargo checks inside Nix dev shell (daemon workspace)
       - name: Check formatting
         run: nix develop --command cargo fmt --check
 
@@ -36,6 +36,9 @@ jobs:
       # Nix build validation
       - name: Build daemon
         run: nix build .#daemon
+
+      - name: Build COSMIC applet
+        run: nix build .#cosmic-applet
 
       - name: Build GNOME extension
         run: nix build .#gnome-extension

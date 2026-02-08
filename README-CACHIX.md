@@ -67,6 +67,7 @@ nix build .#gnome-extension
 
 The cache will contain:
 - `jasper-companion-daemon` binary
+- `jasper-cosmic-applet` binary
 - `jasper-companion-gnome-extension` package
 - Development shell dependencies
 - All Rust dependencies and build artifacts
