@@ -207,7 +207,7 @@ mod tests {
         // Test long insight truncation
         let long_insight = "This is a very long insight that should be truncated for waybar display";
         let output = adapter.format_insight_output("📅", long_insight);
-        assert!(output["text"].as_str().unwrap().len() <= 52); // emoji + space + 47 chars + "..."
+        assert!(output["text"].as_str().unwrap().chars().count() <= 52); // emoji + space + 47 chars + "..."
         assert!(output["tooltip"].as_str().unwrap() == long_insight);
         
         // Test error output

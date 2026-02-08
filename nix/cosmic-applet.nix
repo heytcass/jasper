@@ -25,6 +25,9 @@ rustPlatform.buildRustPackage {
   cargoLock = {
     lockFile = ../Cargo.lock;
     allowBuiltinFetchGit = true;
+    outputHashes = {
+      "libcosmic-1.0.0" = "sha256-pfT6/cYjA3CGrXr2d7aAwfW+7FUNdfQvAeOWkknu/Y8=";
+    };
   };
 
   nativeBuildInputs = [

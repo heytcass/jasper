@@ -641,7 +641,8 @@ Do NOT:\n\
 - Simply restate a calendar entry (\"You have a meeting at 3pm\") — add value beyond what a calendar shows\n\
 - Focus on weather unless it meaningfully impacts plans or activities\n\
 - Repeat something you've already surfaced recently (see recent insights below)\n\
-- Be robotic or generic — write like someone who knows {title} personally, with warmth\n\n\
+- Be robotic or generic — write like someone who knows {title} personally, with warmth\n\
+- Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\n\
 Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
             persona = personality.assistant_persona,

@@ -88,13 +88,20 @@
         packages.daemon = pkgs.rustPlatform.buildRustPackage {
           pname = "jasper-companion-daemon";
           version = "0.2.0";
-          
+
           src = ./.;
-          
+
+          cargoBuildFlags = [ "-p" "jasper-companion-daemon" ];
+          cargoTestFlags = [ "-p" "jasper-companion-daemon" ];
+
           cargoLock = {
             lockFile = ./Cargo.lock;
+            allowBuiltinFetchGit = true;
+            outputHashes = {
+              "libcosmic-1.0.0" = "sha256-pfT6/cYjA3CGrXr2d7aAwfW+7FUNdfQvAeOWkknu/Y8=";
+            };
           };
-          
+
           buildInputs = with pkgs; [ dbus sqlite openssl ];
           nativeBuildInputs = with pkgs; [ pkg-config ];
           

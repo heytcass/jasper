@@ -184,7 +184,7 @@ impl Default for Config {
                 quiet_hours_end: "08:00".to_string(),
             },
             personality: PersonalityConfig {
-                user_title: "Sir".to_string(),
+                user_title: "Tom".to_string(),
                 formality: "balanced".to_string(),
                 humor_level: "occasional".to_string(),
                 assistant_persona: "trusted family assistant".to_string(),
