@@ -68,9 +68,12 @@ config.toml
 *client_secret*
 *token*
 *password*
-secrets.yaml
 secrets.yml
-.sops.yaml
+
+# SOPS - encrypted secrets.yaml and .sops.yaml are safe to commit
+# The age private key (~/.config/sops/age/keys.txt) must NEVER be committed
+!secrets.yaml
+!.sops.yaml
 
 # Configuration files that might contain secrets
 /daemon/config.toml

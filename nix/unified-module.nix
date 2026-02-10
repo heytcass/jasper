@@ -124,7 +124,10 @@ in
       after = [ "graphical-session.target" ];
       wants = [ "graphical-session.target" ];
       wantedBy = [ "default.target" ];
-      
+
+      # SOPS + age for runtime secret decryption
+      path = [ pkgs.sops pkgs.age ];
+
       serviceConfig = {
         Type = "simple";
         ExecStart = "${cfg.package}/bin/jasper-companion start";
@@ -147,6 +150,9 @@ in
       };
       
       environment = {
+        # SOPS encrypted secrets file location
+        JASPER_SOPS_PATH = "/home/tom/Projects/jasper/secrets.yaml";
+
         # Pass configuration to daemon
         JASPER_AUTO_DETECT = toString cfg.autoDetectDesktop;
         JASPER_ACTIVE_FRONTENDS = concatStringsSep "," activeFrontends;
