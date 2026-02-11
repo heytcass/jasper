@@ -642,7 +642,8 @@ Do NOT:\n\
 - Focus on weather unless it meaningfully impacts plans or activities\n\
 - Repeat something you've already surfaced recently (see recent insights below)\n\
 - Be robotic or generic — write like someone who knows {title} personally, with warmth\n\
-- Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\n\
+- Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\
+- NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\n\
 Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
             persona = personality.assistant_persona,
@@ -682,6 +683,21 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             }
         };
         context_parts.push(trigger_text);
+
+        // Detect when there is no real data at all
+        let has_calendar = !context.calendar_events.is_empty();
+        let has_tasks = !context.tasks.is_empty();
+        let has_weather = context.weather.is_some() || context.weather_context.is_some();
+        let has_notes = context.notes_context.is_some();
+
+        if !has_calendar && !has_tasks && !has_weather && !has_notes {
+            context_parts.push(
+                "\nNo calendar events, tasks, weather, or notes are available. \
+                The schedule is completely clear. Do NOT invent or assume any events — \
+                provide a genuine observation about having a clear schedule."
+                    .to_string(),
+            );
+        }
 
         // Calendar events with relative times
         if !context.calendar_events.is_empty() {
