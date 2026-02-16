@@ -5,187 +5,133 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 
 use super::{
     ContextSource, ContextData, ContextDataType, ContextContent, WeatherContext, WeatherForecast
 };
 
-/// OpenWeatherMap API response structures
+// ── Google Weather API response types ──────────────────────────────────
+
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct OpenWeatherMapResponse {
-    coord: Coord,
-    weather: Vec<Weather>,
-    main: Main,
-    visibility: Option<i32>,
-    wind: Option<Wind>,
-    rain: Option<Rain>,
-    snow: Option<Snow>,
-    dt: i64,
-    sys: Sys,
-    timezone: i32,
-    id: i64,
-    name: String,
-    cod: i32,
+#[serde(rename_all = "camelCase")]
+struct CurrentConditionsResponse {
+    weather_condition: Option<WeatherCondition>,
+    temperature: Option<Temperature>,
+    feels_like_temperature: Option<Temperature>,
+    relative_humidity: Option<i32>,
+    wind: Option<WindInfo>,
+    precipitation: Option<Precipitation>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Coord {
-    lon: f64,
-    lat: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Weather {
-    id: i32,
-    main: String,
-    description: String,
-    icon: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Main {
-    temp: f64,
-    feels_like: f64,
-    temp_min: f64,
-    temp_max: f64,
-    pressure: i32,
-    humidity: i32,
-    sea_level: Option<i32>,
-    grnd_level: Option<i32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Wind {
-    speed: f64,
-    deg: i32,
-    gust: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Rain {
-    #[serde(rename = "1h")]
-    one_hour: Option<f64>,
-    #[serde(rename = "3h")]
-    three_hour: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Snow {
-    #[serde(rename = "1h")]
-    one_hour: Option<f64>,
-    #[serde(rename = "3h")]
-    three_hour: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Sys {
-    #[serde(rename = "type")]
-    sys_type: Option<i32>,
-    id: Option<i64>,
-    country: Option<String>,
-    sunrise: Option<i64>,
-    sunset: Option<i64>,
-}
-
-// 5-day forecast API response
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[serde(rename_all = "camelCase")]
 struct ForecastResponse {
-    cod: String,
-    message: i32,
-    cnt: i32,
-    list: Vec<ForecastItem>,
-    city: City,
+    forecast_days: Option<Vec<ForecastDay>>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ForecastItem {
-    dt: i64,
-    main: Main,
-    weather: Vec<Weather>,
-    clouds: Clouds,
-    wind: Wind,
-    visibility: i32,
-    pop: f64, // Probability of precipitation
-    rain: Option<Rain>,
-    snow: Option<Snow>,
-    sys: ForecastSys,
-    dt_txt: String,
+#[serde(rename_all = "camelCase")]
+struct ForecastDay {
+    display_date: Option<DisplayDate>,
+    daytime_forecast: Option<DayPartForecast>,
+    max_temperature: Option<Temperature>,
+    min_temperature: Option<Temperature>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Clouds {
-    all: i32,
+struct DisplayDate {
+    year: Option<i32>,
+    month: Option<u32>,
+    day: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ForecastSys {
-    pod: String, // Part of day (n-night, d-day)
+#[serde(rename_all = "camelCase")]
+struct DayPartForecast {
+    weather_condition: Option<WeatherCondition>,
+    precipitation: Option<Precipitation>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct City {
-    id: i64,
-    name: String,
-    coord: Coord,
-    country: String,
-    population: i64,
-    timezone: i32,
-    sunrise: i64,
-    sunset: i64,
+#[serde(rename_all = "camelCase")]
+struct WeatherCondition {
+    description: Option<LocalizedText>,
+    #[serde(rename = "type")]
+    condition_type: Option<String>,
 }
 
-/// Cached weather result with timestamp
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalizedText {
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Temperature {
+    degrees: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WindInfo {
+    speed: Option<SpeedValue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpeedValue {
+    value: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Precipitation {
+    probability: Option<PrecipProbability>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrecipProbability {
+    percent: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlertsResponse {
+    alerts: Option<Vec<Alert>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Alert {
+    event_name: Option<String>,
+    severity: Option<String>,
+}
+
+// ── Cached weather result ──────────────────────────────────────────────
+
 struct CachedWeather {
     data: WeatherContext,
     fetched_at: DateTime<Utc>,
 }
 
-/// Weather context source with OpenWeatherMap integration
+// ── Weather context source ─────────────────────────────────────────────
+
 pub struct WeatherContextSource {
-    api_key: Option<String>,
-    location: String,
+    google_api_key: String,
+    latitude: f64,
+    longitude: f64,
     enabled: bool,
     client: Client,
-    units: String, // "metric", "imperial", "kelvin"
+    units: String,
     cache_duration_minutes: u32,
     cache: RwLock<Option<CachedWeather>>,
 }
 
 impl WeatherContextSource {
-    /// Create a new weather context source
-    pub fn new(api_key: Option<String>, location: String) -> Self {
-        let enabled = api_key.is_some();
+    pub fn new(google_api_key: String, latitude: f64, longitude: f64, units: String, cache_duration_minutes: u32) -> Self {
+        let enabled = !google_api_key.is_empty();
         Self {
-            api_key,
-            location,
-            enabled,
-            client: Client::new(),
-            units: "imperial".to_string(), // Default to Fahrenheit for US
-            cache_duration_minutes: 60, // Cache for 1 hour
-            cache: RwLock::new(None),
-        }
-    }
-
-    /// Create with custom configuration
-    pub fn with_config(api_key: Option<String>, location: String, units: String, cache_duration_minutes: u32) -> Self {
-        let enabled = api_key.is_some();
-        Self {
-            api_key,
-            location,
+            google_api_key,
+            latitude,
+            longitude,
             enabled,
             client: Client::new(),
             units,
@@ -193,161 +139,139 @@ impl WeatherContextSource {
             cache: RwLock::new(None),
         }
     }
-    
-    /// Fetch current weather data from OpenWeatherMap API
-    async fn fetch_current_weather(&self) -> Result<OpenWeatherMapResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| anyhow!("OpenWeatherMap API key not configured"))?;
-        
+
+    /// Fetch current conditions from Google Weather API
+    async fn fetch_current_weather(&self) -> Result<CurrentConditionsResponse> {
+        let units_system = self.google_units_system();
         let url = format!(
-            "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units={}",
-            self.location, api_key, self.units
+            "https://weather.googleapis.com/v1/currentConditions:lookup?\
+             key={}&location.latitude={}&location.longitude={}&unitsSystem={}",
+            self.google_api_key, self.latitude, self.longitude, units_system
         );
-        
-        debug!("Fetching current weather from: {}", url);
-        
+
+        debug!("Fetching current weather from Google Weather API");
+
         let response = self.client.get(&url).send().await?;
-        
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!("Weather API request failed with status {}: {}", status, body));
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Google Weather currentConditions failed ({}): {}", status, body));
         }
-        
-        let weather_data: OpenWeatherMapResponse = response.json().await?;
-        debug!("Successfully fetched current weather for {}", weather_data.name);
-        
-        Ok(weather_data)
+
+        Ok(response.json().await?)
     }
-    
-    /// Fetch weather forecast from OpenWeatherMap API
+
+    /// Fetch daily forecast from Google Weather API
     async fn fetch_forecast(&self) -> Result<ForecastResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| anyhow!("OpenWeatherMap API key not configured"))?;
-        
+        let units_system = self.google_units_system();
         let url = format!(
-            "https://api.openweathermap.org/data/2.5/forecast?q={}&appid={}&units={}",
-            self.location, api_key, self.units
+            "https://weather.googleapis.com/v1/forecast/days:lookup?\
+             key={}&location.latitude={}&location.longitude={}&days=5&unitsSystem={}",
+            self.google_api_key, self.latitude, self.longitude, units_system
         );
-        
-        debug!("Fetching weather forecast from: {}", url);
-        
+
+        debug!("Fetching weather forecast from Google Weather API");
+
         let response = self.client.get(&url).send().await?;
-        
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!("Weather forecast API request failed with status {}: {}", status, body));
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Google Weather forecast failed ({}): {}", status, body));
         }
-        
-        let forecast_data: ForecastResponse = response.json().await?;
-        debug!("Successfully fetched forecast for {}", forecast_data.city.name);
-        
-        Ok(forecast_data)
+
+        Ok(response.json().await?)
     }
-    
-    /// Convert temperature to display format
-    fn format_temperature(&self, temp: f64) -> String {
+
+    /// Fetch weather alerts from Google Weather API
+    async fn fetch_alerts(&self) -> Result<AlertsResponse> {
+        let url = format!(
+            "https://weather.googleapis.com/v1/publicAlerts:lookup?\
+             key={}&location.latitude={}&location.longitude={}",
+            self.google_api_key, self.latitude, self.longitude
+        );
+
+        debug!("Fetching weather alerts from Google Weather API");
+
+        let response = self.client.get(&url).send().await?;
+        if !response.status().is_success() {
+            // Alerts endpoint may 404 if no alerts — that's fine
+            let status = response.status();
+            if status.as_u16() == 404 {
+                return Ok(AlertsResponse { alerts: None });
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Google Weather alerts failed ({}): {}", status, body));
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Map config units to Google API unitsSystem parameter
+    fn google_units_system(&self) -> &str {
         match self.units.as_str() {
-            "metric" => format!("{:.0}°C", temp),
-            "imperial" => format!("{:.0}°F", temp),
-            "kelvin" => format!("{:.0}K", temp),
-            _ => format!("{:.0}°F", temp), // Default to Fahrenheit
+            "imperial" => "IMPERIAL",
+            "metric" => "METRIC",
+            _ => "IMPERIAL",
         }
     }
-    
-    /// Convert OpenWeatherMap forecast to our WeatherForecast format
-    fn convert_forecast_items(&self, forecast_items: Vec<ForecastItem>) -> Vec<WeatherForecast> {
-        let mut daily_forecasts = HashMap::new();
-        
-        // Group forecast items by day and find daily highs/lows
-        for item in forecast_items {
-            let date = DateTime::from_timestamp(item.dt, 0)
-                .unwrap_or_else(Utc::now)
-                .date_naive();
-            
-            let entry = daily_forecasts.entry(date).or_insert({
-                WeatherForecast {
-                    date: date.and_hms_opt(12, 0, 0).unwrap().and_utc(),
-                    temperature_high: item.main.temp_max as f32,
-                    temperature_low: item.main.temp_min as f32,
-                    conditions: item.weather.first().map(|w| w.main.clone()).unwrap_or_else(|| "Unknown".to_string()),
-                    precipitation_chance: item.pop as f32,
-                    description: item.weather.first().map(|w| w.description.clone()).unwrap_or_else(|| "No description".to_string()),
-                }
-            });
-            
-            // Update highs and lows
-            entry.temperature_high = entry.temperature_high.max(item.main.temp_max as f32);
-            entry.temperature_low = entry.temperature_low.min(item.main.temp_min as f32);
-            
-            // Update precipitation chance to maximum for the day
-            entry.precipitation_chance = entry.precipitation_chance.max(item.pop as f32);
+
+    /// Unit suffix for temperature display
+    fn temp_unit(&self) -> &str {
+        match self.units.as_str() {
+            "metric" => "°C",
+            _ => "°F",
         }
-        
-        // Convert to sorted vector
-        let mut forecasts: Vec<WeatherForecast> = daily_forecasts.into_values().collect();
-        forecasts.sort_by(|a, b| a.date.cmp(&b.date));
-        
-        // Take only the next 5 days
-        forecasts.truncate(5);
-        
-        forecasts
     }
-    
-    /// Generate weather alerts based on conditions
-    fn generate_weather_alerts(&self, current: &OpenWeatherMapResponse, forecast: &[WeatherForecast]) -> Vec<String> {
-        let mut alerts = Vec::new();
-        
-        // Check for severe weather conditions
-        if let Some(weather) = current.weather.first() {
-            match weather.main.as_str() {
-                "Thunderstorm" => alerts.push("Thunderstorms expected - plan indoor activities".to_string()),
-                "Snow" => alerts.push("Snow conditions - allow extra travel time".to_string()),
-                "Rain" => {
-                    if current.rain.as_ref().and_then(|r| r.one_hour).unwrap_or(0.0) > 5.0 {
-                        alerts.push("Heavy rain expected - consider rescheduling outdoor plans".to_string());
-                    }
-                },
-                _ => {}
-            }
-        }
-        
-        // Check temperature extremes
-        if self.units == "imperial" {
-            if current.main.temp < 32.0 {
-                alerts.push("Freezing temperatures - dress warmly".to_string());
-            } else if current.main.temp > 90.0 {
-                alerts.push("High temperatures - stay hydrated".to_string());
-            }
-        } else if self.units == "metric" {
-            if current.main.temp < 0.0 {
-                alerts.push("Below freezing - dress warmly".to_string());
-            } else if current.main.temp > 32.0 {
-                alerts.push("High temperatures - stay hydrated".to_string());
-            }
-        }
-        
-        // Check for precipitation in upcoming forecast
-        for forecast_day in forecast.iter().take(2) { // Check next 2 days
-            if forecast_day.precipitation_chance > 0.7 {
-                let day_name = if forecast_day.date.date_naive() == Utc::now().date_naive() {
-                    "today".to_string()
-                } else if forecast_day.date.date_naive() == (Utc::now() + chrono::Duration::days(1)).date_naive() {
-                    "tomorrow".to_string()
-                } else {
-                    forecast_day.date.format("%A").to_string()
-                };
-                
-                alerts.push(format!("High chance of rain {} - bring an umbrella", day_name));
-            }
-        }
-        
-        alerts
+
+    /// Convert Google forecast days to our WeatherForecast format
+    fn convert_forecast(&self, days: Vec<ForecastDay>) -> Vec<WeatherForecast> {
+        days.into_iter()
+            .filter_map(|day| {
+                let date = day.display_date.as_ref().and_then(|d| {
+                    let y = d.year?;
+                    let m = d.month?;
+                    let d = d.day?;
+                    chrono::NaiveDate::from_ymd_opt(y, m, d)
+                        .and_then(|nd| nd.and_hms_opt(12, 0, 0))
+                        .map(|ndt| ndt.and_utc())
+                })?;
+
+                let high = day.max_temperature.as_ref()?.degrees? as f32;
+                let low = day.min_temperature.as_ref()?.degrees? as f32;
+
+                let conditions = day.daytime_forecast.as_ref()
+                    .and_then(|df| df.weather_condition.as_ref())
+                    .and_then(|wc| wc.condition_type.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                let description = day.daytime_forecast.as_ref()
+                    .and_then(|df| df.weather_condition.as_ref())
+                    .and_then(|wc| wc.description.as_ref())
+                    .and_then(|d| d.text.clone())
+                    .unwrap_or_else(|| conditions.clone());
+
+                let precip_chance = day.daytime_forecast.as_ref()
+                    .and_then(|df| df.precipitation.as_ref())
+                    .and_then(|p| p.probability.as_ref())
+                    .and_then(|pp| pp.percent)
+                    .unwrap_or(0) as f32 / 100.0;
+
+                Some(WeatherForecast {
+                    date,
+                    temperature_high: high,
+                    temperature_low: low,
+                    conditions,
+                    precipitation_chance: precip_chance,
+                    description,
+                })
+            })
+            .collect()
     }
-    
-    /// Fetch weather data from OpenWeatherMap API, with TTL-based caching
-    async fn fetch_weather_data(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<WeatherContext> {
+
+    /// Fetch and assemble all weather data with TTL-based caching
+    async fn fetch_weather_data(&self) -> Result<WeatherContext> {
         if !self.enabled {
-            return Err(anyhow!("Weather API is not enabled (no API key configured)"));
+            return Err(anyhow!("Weather API not enabled (no Google API key configured)"));
         }
 
         // Return cached data if still fresh
@@ -362,35 +286,80 @@ impl WeatherContextSource {
             }
         }
 
-        // Fetch current weather and forecast in parallel
-        let (current_result, forecast_result) = tokio::join!(
+        // Fetch current conditions, forecast, and alerts in parallel
+        let (current_result, forecast_result, alerts_result) = tokio::join!(
             self.fetch_current_weather(),
-            self.fetch_forecast()
+            self.fetch_forecast(),
+            self.fetch_alerts()
         );
-        
-        let current_weather = current_result?;
-        let forecast_response = forecast_result?;
-        
-        // Convert forecast data
-        let forecast = self.convert_forecast_items(forecast_response.list);
-        
-        // Generate current conditions string
-        let current_conditions = if let Some(weather) = current_weather.weather.first() {
-            format!(
-                "{}, {} (feels like {}), {}% humidity",
-                weather.description,
-                self.format_temperature(current_weather.main.temp),
-                self.format_temperature(current_weather.main.feels_like),
-                current_weather.main.humidity
-            )
-        } else {
-            format!("Current temperature: {}", self.format_temperature(current_weather.main.temp))
+
+        let current = current_result?;
+        let forecast_resp = forecast_result?;
+
+        // Alerts are best-effort — log failures but don't fail the whole fetch
+        let alerts_resp = match alerts_result {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("Failed to fetch weather alerts (non-fatal): {}", e);
+                AlertsResponse { alerts: None }
+            }
         };
-        
-        // Generate weather alerts
-        let alerts = self.generate_weather_alerts(&current_weather, &forecast);
-        
-        info!("Weather data successfully fetched for {}", self.location);
+
+        // Build current conditions string
+        let unit = self.temp_unit();
+        let condition_text = current.weather_condition.as_ref()
+            .and_then(|wc| wc.description.as_ref())
+            .and_then(|d| d.text.clone())
+            .unwrap_or_else(|| "Unknown conditions".to_string());
+
+        let temp = current.temperature.as_ref()
+            .and_then(|t| t.degrees)
+            .map(|d| format!("{:.0}{}", d, unit))
+            .unwrap_or_default();
+
+        let feels_like = current.feels_like_temperature.as_ref()
+            .and_then(|t| t.degrees)
+            .map(|d| format!(" (feels like {:.0}{})", d, unit))
+            .unwrap_or_default();
+
+        let humidity = current.relative_humidity
+            .map(|h| format!(", {}% humidity", h))
+            .unwrap_or_default();
+
+        let current_conditions = format!("{}, {}{}{}", condition_text, temp, feels_like, humidity);
+
+        // Convert forecast
+        let forecast = forecast_resp.forecast_days
+            .map(|days| self.convert_forecast(days))
+            .unwrap_or_default();
+
+        // Convert alerts
+        let mut alerts: Vec<String> = alerts_resp.alerts
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|a| {
+                let name = a.event_name?;
+                let severity = a.severity.unwrap_or_default();
+                Some(if severity.is_empty() { name } else { format!("{} ({})", name, severity) })
+            })
+            .collect();
+
+        // Also generate simple temperature-based alerts like the old implementation
+        if let Some(temp_deg) = current.temperature.as_ref().and_then(|t| t.degrees) {
+            if self.units == "imperial" {
+                if temp_deg < 32.0 {
+                    alerts.push("Freezing temperatures — dress warmly".to_string());
+                } else if temp_deg > 95.0 {
+                    alerts.push("Extreme heat — stay hydrated".to_string());
+                }
+            } else if temp_deg < 0.0 {
+                alerts.push("Below freezing — dress warmly".to_string());
+            } else if temp_deg > 35.0 {
+                alerts.push("Extreme heat — stay hydrated".to_string());
+            }
+        }
+
+        info!("Weather data fetched from Google Weather API");
 
         let result = WeatherContext {
             current_conditions,
@@ -398,7 +367,7 @@ impl WeatherContextSource {
             alerts,
         };
 
-        // Store in cache
+        // Cache the result
         {
             let mut cache = self.cache.write().await;
             *cache = Some(CachedWeather {
@@ -416,40 +385,41 @@ impl ContextSource for WeatherContextSource {
     fn source_id(&self) -> &str {
         "weather"
     }
-    
+
     fn display_name(&self) -> &str {
         "Weather"
     }
-    
+
     fn is_enabled(&self) -> bool {
         self.enabled
     }
-    
-    async fn fetch_context(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<ContextData> {
-        info!("Fetching weather context for location: {}", self.location);
-        
-        let weather_context = self.fetch_weather_data(start, end).await?;
-        
+
+    async fn fetch_context(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<ContextData> {
+        info!("Fetching weather context from Google Weather API");
+
+        let weather_context = self.fetch_weather_data().await?;
+
         Ok(ContextData {
             source_id: self.source_id().to_string(),
             timestamp: Utc::now(),
             data_type: ContextDataType::Weather,
-            priority: 75, // Lower priority
+            priority: 75,
             content: ContextContent::Weather(weather_context),
             metadata: {
                 let mut metadata = HashMap::new();
-                metadata.insert("location".to_string(), self.location.clone());
-                metadata.insert("source_type".to_string(), "weather".to_string());
+                metadata.insert("latitude".to_string(), self.latitude.to_string());
+                metadata.insert("longitude".to_string(), self.longitude.to_string());
+                metadata.insert("source_type".to_string(), "google_weather".to_string());
                 metadata
             },
         })
     }
-    
+
     fn priority(&self) -> i32 {
-        75 // Lower priority
+        75
     }
-    
+
     fn required_config(&self) -> Vec<String> {
-        vec!["api_key".to_string(), "location".to_string()]
+        vec!["google_api_key".to_string(), "latitude".to_string(), "longitude".to_string()]
     }
 }

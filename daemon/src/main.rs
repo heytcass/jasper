@@ -105,15 +105,16 @@ async fn start_daemon() -> Result<()> {
     {
         let config = config_arc.read();
         if let Some(weather_config) = config.get_weather_config() {
-            if weather_config.enabled && !weather_config.api_key.is_empty() {
-                let weather_source = WeatherContextSource::with_config(
-                    Some(weather_config.api_key.clone()),
-                    weather_config.location.clone(),
+            if weather_config.enabled && !weather_config.google_api_key.is_empty() {
+                let weather_source = WeatherContextSource::new(
+                    weather_config.google_api_key.clone(),
+                    weather_config.latitude,
+                    weather_config.longitude,
                     weather_config.units.clone(),
                     weather_config.cache_duration_minutes,
                 );
                 context_manager.add_source(Box::new(weather_source));
-                info!("Weather context source registered for {}", weather_config.location);
+                info!("Weather context source registered ({}, {})", weather_config.latitude, weather_config.longitude);
             }
         }
     }
@@ -130,8 +131,9 @@ async fn start_daemon() -> Result<()> {
                     calendar_ids: gc.calendar_ids.clone(),
                 };
                 let data_dir = Config::get_data_dir().ok()?;
+                let tz = config.get_timezone();
                 info!("Google Calendar service initialized");
-                Some(GoogleCalendarService::new(gcal_config, data_dir))
+                Some(GoogleCalendarService::new(gcal_config, data_dir, tz))
             } else {
                 None
             }
@@ -292,7 +294,8 @@ async fn auth_google() -> Result<()> {
         calendar_ids: gc.calendar_ids,
     };
     let data_dir = Config::get_data_dir()?;
-    let service = GoogleCalendarService::new(gcal_config, data_dir);
+    let tz = config_arc.read().get_timezone();
+    let service = GoogleCalendarService::new(gcal_config, data_dir, tz);
 
     // Check if already authenticated
     if service.is_authenticated().await {

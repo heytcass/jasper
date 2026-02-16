@@ -406,6 +406,7 @@ impl SimplifiedDaemonCore {
                 start_time: DateTime::from_timestamp(event.start_time, 0).unwrap_or_default(),
                 end_time: event.end_time.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                 location: event.location,
+                is_all_day: event.is_all_day.unwrap_or(false),
             })
             .collect();
 
@@ -703,11 +704,15 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         if !context.calendar_events.is_empty() {
             let mut cal_section = String::from("\nCalendar (next 24h):");
             for event in &context.calendar_events {
-                let relative = Self::format_relative_time(&local_now, &event.start_time);
+                let timing = if event.is_all_day {
+                    "all day".to_string()
+                } else {
+                    Self::format_relative_time(&local_now, &event.start_time)
+                };
                 let location = event.location.as_ref()
                     .map(|l| format!(", at {}", l))
                     .unwrap_or_default();
-                cal_section.push_str(&format!("\n- \"{}\" — {}{}", event.title, relative, location));
+                cal_section.push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
             }
             context_parts.push(cal_section);
         }

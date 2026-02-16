@@ -75,9 +75,10 @@ pub struct ObsidianConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherConfig {
     pub enabled: bool,
-    pub api_key: String,
-    pub location: String,
-    pub units: String, // "metric", "imperial", "kelvin"
+    pub google_api_key: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub units: String, // "metric", "imperial"
     pub cache_duration_minutes: u32,
 }
 
@@ -114,8 +115,9 @@ impl Default for Config {
                 }),
                 weather: Some(WeatherConfig {
                     enabled: false, // Disabled by default, needs API key
-                    api_key: String::new(),
-                    location: "Detroit, MI".to_string(),
+                    google_api_key: String::new(),
+                    latitude: 42.3314,
+                    longitude: -83.0458,
                     units: "imperial".to_string(),
                     cache_duration_minutes: 30,
                 }),
@@ -150,7 +152,10 @@ impl Config {
                 warn!("Failed to load SOPS secrets, using config file values: {}", e);
             }
         }
-        
+
+        // Apply environment variable overrides (for NixOS sops-nix integration)
+        config.apply_env_overrides();
+
         // Validate configuration
         config.validate()?;
         
@@ -180,14 +185,14 @@ impl Config {
             }
         }
         
-        // Override weather API key
-        if let Some(weather_api_key) = secrets.get("services.openweathermap") {
-            debug!("Using OpenWeatherMap API key from SOPS");
+        // Override Google Weather API key
+        if let Some(weather_api_key) = secrets.get("services.google_weather_api_key") {
+            debug!("Using Google Weather API key from SOPS");
             if let Some(ref mut context_sources) = self.context_sources {
                 if let Some(ref mut weather_config) = context_sources.weather {
-                    weather_config.api_key = weather_api_key.clone();
-                    weather_config.enabled = true; // Enable weather when API key is available
-                    debug!("Weather context source enabled with API key from SOPS");
+                    weather_config.google_api_key = weather_api_key.clone();
+                    weather_config.enabled = true;
+                    debug!("Weather context source enabled with Google Weather API key from SOPS");
                 }
             }
         }
@@ -253,6 +258,38 @@ impl Config {
     pub fn get_api_key(&self) -> Option<String> {
         self.ai.api_key.clone()
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+    }
+
+    /// Apply Google Calendar credentials from environment variables
+    /// Called after config load to allow env vars to fill in empty credentials
+    pub fn apply_env_overrides(&mut self) {
+        if let Some(ref mut gc) = self.google_calendar {
+            if gc.client_id.is_empty() {
+                if let Ok(id) = std::env::var("GOOGLE_CLIENT_ID") {
+                    debug!("Using Google Calendar client ID from GOOGLE_CLIENT_ID env var");
+                    gc.client_id = id;
+                }
+            }
+            if gc.client_secret.is_empty() {
+                if let Ok(secret) = std::env::var("GOOGLE_CLIENT_SECRET") {
+                    debug!("Using Google Calendar client secret from GOOGLE_CLIENT_SECRET env var");
+                    gc.client_secret = secret;
+                }
+            }
+        }
+
+        // Google Weather API key
+        if let Some(ref mut context_sources) = self.context_sources {
+            if let Some(ref mut weather_config) = context_sources.weather {
+                if weather_config.google_api_key.is_empty() {
+                    if let Ok(key) = std::env::var("GOOGLE_WEATHER_API_KEY") {
+                        debug!("Using Google Weather API key from GOOGLE_WEATHER_API_KEY env var");
+                        weather_config.google_api_key = key;
+                        weather_config.enabled = true;
+                    }
+                }
+            }
+        }
     }
     
     /// Get timezone as parsed Tz object, falling back to UTC if invalid

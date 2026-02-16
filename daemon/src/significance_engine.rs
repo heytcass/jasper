@@ -28,6 +28,7 @@ pub struct CalendarEventSummary {
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
     pub location: Option<String>,
+    pub is_all_day: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
@@ -297,6 +298,7 @@ mod tests {
                 start_time: Utc::now() + Duration::hours(1),
                 end_time: None,
                 location: None,
+                is_all_day: false,
             }],
             weather: None,
             tasks: vec![],
@@ -324,6 +326,7 @@ mod tests {
             start_time: Utc::now() + Duration::hours(2),
             end_time: None,
             location: None,
+            is_all_day: false,
         };
 
         let snapshot1 = ContextSnapshot {

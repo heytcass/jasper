@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, TimeZone, Utc, Duration};
 use oauth2::{
     ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
     AuthUrl, TokenUrl, TokenResponse,
@@ -90,16 +90,18 @@ pub struct GoogleCalendarService {
     config: GoogleCalendarConfig,
     token_file_path: PathBuf,
     http_client: reqwest::Client,
+    user_timezone: chrono_tz::Tz,
 }
 
 impl GoogleCalendarService {
-    pub fn new(config: GoogleCalendarConfig, data_dir: PathBuf) -> Self {
+    pub fn new(config: GoogleCalendarConfig, data_dir: PathBuf, user_timezone: chrono_tz::Tz) -> Self {
         let token_file_path = data_dir.join("google_calendar_token.json");
-        
+
         Self {
             config,
             token_file_path,
             http_client: reqwest::Client::new(),
+            user_timezone,
         }
     }
 
@@ -332,14 +334,16 @@ impl GoogleCalendarService {
                     .map_err(|e| anyhow!("Invalid start datetime: {}", e))?
                     .with_timezone(&Utc)
             } else if let Some(date_str) = &start.date {
-                // All-day event - parse date and set to start of day in local timezone
-                // For all-day events, we want to preserve the local date, not convert to UTC midnight
+                // All-day event — interpret the date as midnight in the user's local timezone,
+                // then convert to UTC so the stored timestamp reflects the correct instant.
                 let naive_date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
                     .map_err(|e| anyhow!("Invalid start date: {}", e))?;
                 let naive_datetime = naive_date.and_hms_opt(0, 0, 0)
                     .ok_or_else(|| anyhow!("Invalid date"))?;
-                // Store as naive UTC to preserve the date boundary
-                DateTime::from_naive_utc_and_offset(naive_datetime, Utc)
+                self.user_timezone.from_local_datetime(&naive_datetime)
+                    .earliest()
+                    .ok_or_else(|| anyhow!("Ambiguous local time for all-day event start"))?
+                    .with_timezone(&Utc)
             } else {
                 return Err(anyhow!("Event has no start time"));
             }
@@ -354,12 +358,16 @@ impl GoogleCalendarService {
                     .map_err(|e| anyhow!("Invalid end datetime: {}", e))?
                     .with_timezone(&Utc))
             } else if let Some(date_str) = &end.date {
-                // All-day event ends at end of day in local timezone
+                // All-day event end — Google uses exclusive end dates (a 1-day event on
+                // Feb 15 has end = "2026-02-16"). Interpret as local midnight, then to UTC.
                 let naive_date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
                     .map_err(|e| anyhow!("Invalid end date: {}", e))?;
-                let naive_datetime = naive_date.and_hms_opt(23, 59, 59)
+                let naive_datetime = naive_date.and_hms_opt(0, 0, 0)
                     .ok_or_else(|| anyhow!("Invalid date"))?;
-                Some(DateTime::from_naive_utc_and_offset(naive_datetime, Utc))
+                Some(self.user_timezone.from_local_datetime(&naive_datetime)
+                    .earliest()
+                    .ok_or_else(|| anyhow!("Ambiguous local time for all-day event end"))?
+                    .with_timezone(&Utc))
             } else {
                 None
             }
