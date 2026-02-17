@@ -12,7 +12,6 @@ use parking_lot::RwLock;
 use tokio::time::{Duration, interval};
 use tracing::{info, debug, warn, error};
 use chrono::{DateTime, Utc, Timelike};
-use serde_json;
 
 // Trait to detect emoji characters
 trait EmojiChar {
@@ -800,7 +799,7 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
     /// Send the pre-built request body to the Anthropic API. Returns insight and tokens used.
     async fn send_anthropic_request(&self, request_body: &serde_json::Value) -> JasperResult<(AiInsight, u64)> {
         let api_key = self.config.read().get_api_key()
-            .ok_or_else(|| crate::errors::JasperError::authentication("anthropic", "API key not configured. Set via config, SOPS secrets, or ANTHROPIC_API_KEY environment variable."))?;
+            .ok_or_else(|| crate::errors::JasperError::Authentication { service: "anthropic".into(), message: "API key not configured. Set via config, SOPS secrets, or ANTHROPIC_API_KEY environment variable.".into() })?;
 
         // Strip our internal field before sending
         let mut body = request_body.clone();

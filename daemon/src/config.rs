@@ -7,8 +7,6 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::fs;
 use tracing::{info, debug, warn};
-use chrono;
-use chrono_tz;
 // URL validation without external crate
 
 use crate::sops_integration::SopsSecrets;
@@ -386,10 +384,12 @@ impl Config {
         }
         
         // Check for basic URL structure
-        let url_without_scheme = if url.starts_with("https://") {
-            &url[8..]
+        let url_without_scheme = if let Some(stripped) = url.strip_prefix("https://") {
+            stripped
+        } else if let Some(stripped) = url.strip_prefix("http://") {
+            stripped
         } else {
-            &url[7..]
+            url
         };
         
         if url_without_scheme.is_empty() {
@@ -435,10 +435,8 @@ impl Config {
         match timezone.parse::<chrono_tz::Tz>() {
             Ok(_) => Ok(()),
             Err(_) => {
-                let suggestions = vec![
-                    "UTC", "America/New_York", "Europe/London", "Asia/Tokyo", 
-                    "America/Detroit", "Europe/Paris", "Asia/Shanghai"
-                ];
+                let suggestions = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo", 
+                    "America/Detroit", "Europe/Paris", "Asia/Shanghai"];
                 Err(anyhow::anyhow!(
                     "{} '{}' is invalid timezone. Common examples: {}", 
                     field_name, timezone, suggestions.join(", ")
@@ -508,14 +506,13 @@ impl Config {
         self.validate_url(redirect_uri, "redirect_uri")?;
         
         // Security checks for redirect URI
-        if redirect_uri.starts_with("http://") {
-            if !redirect_uri.contains("localhost") && !redirect_uri.contains("127.0.0.1") {
+        if redirect_uri.starts_with("http://")
+            && !redirect_uri.contains("localhost") && !redirect_uri.contains("127.0.0.1") {
                 return Err(anyhow::anyhow!(
                     "HTTP redirect_uri only allowed for localhost/127.0.0.1, got: {}", 
                     redirect_uri
                 ));
             }
-        }
         
         // Check for common OAuth security issues
         if redirect_uri.contains("#") {
@@ -601,24 +598,22 @@ impl Config {
     fn validate_security_settings(&self) -> Result<()> {
         // Check for insecure configurations
         if let Some(ref gc) = self.google_calendar {
-            if gc.enabled && gc.redirect_uri.starts_with("http://") {
-                if !gc.redirect_uri.contains("localhost") && !gc.redirect_uri.contains("127.0.0.1") {
+            if gc.enabled && gc.redirect_uri.starts_with("http://")
+                && !gc.redirect_uri.contains("localhost") && !gc.redirect_uri.contains("127.0.0.1") {
                     return Err(anyhow::anyhow!(
                         "HTTP OAuth redirect is insecure for non-localhost URLs: {}", 
                         gc.redirect_uri
                     ));
                 }
-            }
         }
         
         // Validate configured paths don't have obvious security issues
         if let Some(ref sources) = self.context_sources {
             if let Some(ref obs) = sources.obsidian {
-                if obs.enabled {
-                    if obs.vault_path.contains("../") || obs.vault_path.starts_with("/tmp/") {
+                if obs.enabled
+                    && (obs.vault_path.contains("../") || obs.vault_path.starts_with("/tmp/")) {
                         warn!("Potentially insecure vault path: {}", obs.vault_path);
                     }
-                }
             }
         }
         
@@ -638,8 +633,8 @@ impl Config {
     /// Check if a context source is enabled
     pub fn is_context_source_enabled(&self, source_id: &str) -> bool {
         match source_id {
-            "obsidian" => self.get_obsidian_config().map_or(false, |c| c.enabled),
-            "weather" => self.get_weather_config().map_or(false, |c| c.enabled),
+            "obsidian" => self.get_obsidian_config().is_some_and(|c| c.enabled),
+            "weather" => self.get_weather_config().is_some_and(|c| c.enabled),
             "calendar" => true, // Always enabled
             _ => false,
         }

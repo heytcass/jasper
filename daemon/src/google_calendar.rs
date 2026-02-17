@@ -41,17 +41,6 @@ struct GoogleTokenResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct GoogleCalendarList {
-    items: Option<Vec<GoogleCalendarListEntry>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleCalendarListEntry {
-    id: Option<String>,
-    summary: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct GoogleEventsResponse {
     items: Option<Vec<GoogleEvent>>,
     #[serde(rename = "nextPageToken")]
@@ -415,53 +404,6 @@ impl GoogleCalendarService {
         let token_data = fs::read_to_string(&self.token_file_path).await?;
         let token: StoredToken = serde_json::from_str(&token_data)?;
         Ok(token)
-    }
-
-    /// Get calendar metadata for database storage
-    pub async fn get_calendar_metadata(&self, calendar_id: &str) -> Result<(String, String, Option<String>)> {
-        let token = self.get_valid_token().await?;
-
-        let response = self.http_client
-            .get(&format!("https://www.googleapis.com/calendar/v3/calendars/{}", urlencoding::encode(calendar_id)))
-            .bearer_auth(&token.access_token)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Google Calendar API request failed: {}", e))?;
-
-        let response = handle_google_api_response(response).await?;
-        let calendar_info: GoogleCalendarListEntry = parse_json_response(response, "Google Calendar response").await?;
-
-        Ok((
-            calendar_id.to_string(),
-            calendar_info.summary.unwrap_or_else(|| calendar_id.to_string()),
-            None, // We'll infer color from the calendar ID patterns
-        ))
-    }
-
-    /// Get calendar list for configuration using direct REST API
-    pub async fn list_calendars(&self) -> Result<Vec<(String, String)>> {
-        let token = self.get_valid_token().await?;
-
-        let response = self.http_client
-            .get("https://www.googleapis.com/calendar/v3/users/me/calendarList")
-            .bearer_auth(&token.access_token)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Google Calendar API request failed: {}", e))?;
-
-        let response = handle_google_api_response(response).await?;
-        let calendar_list: GoogleCalendarList = parse_json_response(response, "Google Calendar list response").await?;
-
-        let mut calendars = Vec::new();
-        if let Some(items) = calendar_list.items {
-            for calendar in items {
-                if let (Some(id), Some(summary)) = (calendar.id, calendar.summary) {
-                    calendars.push((id, summary));
-                }
-            }
-        }
-
-        Ok(calendars)
     }
 
     /// Manual token exchange to avoid oauth2 crate JSON parsing issues

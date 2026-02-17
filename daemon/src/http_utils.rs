@@ -15,17 +15,6 @@ pub async fn handle_google_api_response(response: Response) -> Result<Response> 
     Ok(response)
 }
 
-/// Handle generic HTTP API response errors
-pub async fn handle_api_response(response: Response, api_name: &str) -> Result<Response> {
-    let status = response.status();
-    if !status.is_success() {
-        let error_text = response.text().await?;
-        warn!("{} API error: {} - {}", api_name, status, error_text);
-        return Err(anyhow!("{} API error: {} - {}", api_name, status, error_text));
-    }
-    Ok(response)
-}
-
 /// Handle OAuth2 response errors and return response text for debugging
 pub async fn handle_oauth2_response_with_text(response: Response) -> Result<String> {
     let status = response.status();
@@ -45,13 +34,4 @@ where
 {
     response.json().await
         .map_err(|e| anyhow!("Failed to parse {}: {}", context, e))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    // Note: These would be integration tests in a real scenario
-    // For now, we include them for completeness but they won't run
-    // without setting up mock HTTP responses
 }

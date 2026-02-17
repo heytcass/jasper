@@ -8,13 +8,7 @@ use std::time::{Duration as StdDuration};
 use tokio::time::sleep;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SimpleInsightCache {
-    last_insight: Option<String>,
-    cached_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiCallStats {
+struct ApiCallStats {
     calls_today: u32,
     daily_limit: u32,
     last_reset: DateTime<Utc>,
@@ -65,7 +59,6 @@ impl Default for RateLimitConfig {
 
 #[derive(Clone)]
 pub struct ApiManager {
-    cache: Arc<RwLock<SimpleInsightCache>>,
     stats: Arc<RwLock<ApiCallStats>>,
     config: RateLimitConfig,
 }
@@ -92,10 +85,6 @@ impl ApiManager {
         };
 
         Self {
-            cache: Arc::new(RwLock::new(SimpleInsightCache {
-                last_insight: None,
-                cached_at: None,
-            })),
             stats: Arc::new(RwLock::new(stats)),
             config,
         }
@@ -207,98 +196,6 @@ impl ApiManager {
         }
     }
 
-    pub fn get_last_insight(&self) -> Option<String> {
-        let cache = self.cache.read();
-        
-        if let Some(ref insight) = cache.last_insight {
-            debug!("Using last cached insight");
-            Some(insight.clone())
-        } else {
-            debug!("No cached insight available");
-            None
-        }
-    }
-
-    pub fn cache_insight(&self, insight: String) {
-        debug!("Caching latest insight");
-        let mut cache = self.cache.write();
-        cache.last_insight = Some(insight);
-        cache.cached_at = Some(Utc::now());
-        debug!("Cached latest insight");
-    }
-
-
-    pub fn create_calendar_hash(&self, events: &[impl std::fmt::Debug]) -> String {
-        // Create a simple hash of the calendar events
-        // In practice, you'd want a proper hash function
-        let events_string = format!("{:?}", events);
-        format!("{:x}", md5::compute(events_string.as_bytes()))
-    }
-
-    pub fn create_context_hash(&self, events: &[impl std::fmt::Debug], additional_context: &[crate::context_sources::ContextData]) -> String {
-        use crate::context_sources::ContextContent;
-        
-        // Create semantically meaningful hash that focuses on important changes
-        let mut hash_components = Vec::new();
-        
-        // Hash calendar events (existing logic for compatibility)
-        let events_string = format!("{:?}", events);
-        hash_components.push(events_string);
-        
-        // Hash each context source focusing on meaningful fields only
-        for context in additional_context {
-            let context_summary = match &context.content {
-                ContextContent::Calendar(cal_ctx) => {
-                    // Focus on event times, titles, conflicts - ignore metadata
-                    format!("cal:{}:{}:{}",
-                        cal_ctx.events.len(),
-                        cal_ctx.conflicts.join("|"),
-                        cal_ctx.upcoming_deadlines.join("|")
-                    )
-                },
-                ContextContent::Tasks(task_ctx) => {
-                    // Focus on task counts and urgency - ignore full descriptions
-                    format!("tasks:{}:{}:{}",
-                        task_ctx.tasks.len(),
-                        task_ctx.overdue_count,
-                        task_ctx.upcoming_count
-                    )
-                },
-                ContextContent::Notes(notes_ctx) => {
-                    // Focus on project status - ignore full content
-                    let project_statuses: Vec<String> = notes_ctx.active_projects.iter()
-                        .map(|p| format!("{}:{:?}:{}", p.name, p.status, p.progress))
-                        .collect();
-                    format!("notes:{}:{}:{}",
-                        notes_ctx.daily_notes.len(),
-                        project_statuses.join("|"),
-                        notes_ctx.pending_tasks.len()
-                    )
-                },
-                ContextContent::Weather(weather_ctx) => {
-                    // Focus on significant conditions and alerts - ignore minor temp changes
-                    format!("weather:{}:{}",
-                        weather_ctx.current_conditions,
-                        weather_ctx.alerts.join("|")
-                    )
-                }
-            };
-            
-            hash_components.push(format!("{}:{}", context.source_id, context_summary));
-        }
-        
-        // Create final hash
-        let combined_string = hash_components.join(":");
-        format!("{:x}", md5::compute(combined_string.as_bytes()))
-    }
-
-    pub fn clear_cache(&self) {
-        let mut cache = self.cache.write();
-        cache.last_insight = None;
-        cache.cached_at = None;
-        debug!("Cache cleared");
-    }
-
     /// Execute an API call with automatic retry and backoff
     pub async fn execute_with_retry<F, Fut, T>(&self, operation: F) -> Result<T>
     where
@@ -364,35 +261,6 @@ impl ApiManager {
         }
     }
     
-    /// Get current API statistics
-    pub fn get_stats(&self) -> ApiCallStats {
-        self.stats.read().clone()
-    }
-    
-    /// Get wait time for next allowed API call
-    pub fn get_wait_time(&self) -> Option<StdDuration> {
-        let stats = self.stats.read();
-        let now = Utc::now();
-        
-        if now < stats.next_allowed_attempt {
-            let wait_ms = (stats.next_allowed_attempt - now).num_milliseconds();
-            Some(StdDuration::from_millis(wait_ms.max(0) as u64))
-        } else {
-            None
-        }
-    }
-    
-    /// Check if circuit breaker is open
-    pub fn is_circuit_open(&self) -> bool {
-        let stats = self.stats.read();
-        if stats.consecutive_failures >= self.config.circuit_failure_threshold {
-            if let Some(last_failure) = stats.last_failure {
-                let recovery_time = last_failure + Duration::minutes(self.config.circuit_recovery_timeout_minutes as i64);
-                return Utc::now() < recovery_time;
-            }
-        }
-        false
-    }
 }
 
 impl Default for ApiManager {
@@ -444,43 +312,23 @@ mod tests {
             ..Default::default()
         };
         let manager = ApiManager::with_config(config);
-        
+
         // Record failures
         manager.record_api_failure("test error 1");
         manager.record_api_failure("test error 2");
-        
-        // Circuit should be open
-        assert!(manager.is_circuit_open());
+
+        // Circuit should be open — can_make_api_call reflects this
         assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::CircuitBreaker)));
-    }
-    
-    #[test]
-    fn test_exponential_backoff() {
-        let manager = ApiManager::new();
-        
-        // Record a failure
-        manager.record_api_failure("test error");
-        
-        // Should be in backoff period
-        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::Backoff)));
-        
-        // Wait time should be available
-        assert!(manager.get_wait_time().is_some());
     }
 
     #[test]
-    fn test_caching() {
+    fn test_exponential_backoff() {
         let manager = ApiManager::new();
-        let hash = "test_hash".to_string();
-        let insight = "Test insight".to_string();
-        
-        // Should return None initially
-        assert!(manager.get_last_insight().is_none());
-        
-        // Cache an insight
-        manager.cache_insight(insight.clone());
-        
-        // Should return cached insight
-        assert_eq!(manager.get_last_insight(), Some(insight));
+
+        // Record a failure
+        manager.record_api_failure("test error");
+
+        // Should be in backoff period
+        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::Backoff)));
     }
 }

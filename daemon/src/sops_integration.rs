@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::process::Command;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::env;
 use tracing::{debug, warn, info};
 
@@ -52,7 +52,7 @@ impl SopsSecrets {
         }
         
         // Add standard locations with proper path expansion
-        if let Some(home_dir) = env::var("HOME").ok() {
+        if let Ok(home_dir) = env::var("HOME") {
             let home_path = PathBuf::from(home_dir);
             paths.push(home_path.join(".nixos/secrets/secrets.yaml"));
             paths.push(home_path.join(".config/jasper-companion/secrets.yaml"));
@@ -76,7 +76,7 @@ impl SopsSecrets {
     }
     
     /// Load secrets from a specific SOPS file path
-    fn load_from_file_path(path: &PathBuf) -> Result<Self> {
+    fn load_from_file_path(path: &Path) -> Result<Self> {
         let path_str = path.to_string_lossy();
         debug!("Loading secrets from SOPS file: {}", path_str);
         
@@ -94,7 +94,7 @@ impl SopsSecrets {
     }
     
     /// Decrypt SOPS file using different available methods
-    fn decrypt_sops_file(path: &PathBuf) -> Result<Self> {
+    fn decrypt_sops_file(path: &Path) -> Result<Self> {
         let path_str = path.to_string_lossy();
         
         // Method 1: Try direct sops command (if available in PATH)
@@ -116,7 +116,7 @@ impl SopsSecrets {
             .arg("-p")
             .arg("sops")
             .arg("--run")
-            .arg(&format!("sops -d {}", path_str))
+            .arg(format!("sops -d {}", path_str))
             .output() {
             
             if output.status.success() {

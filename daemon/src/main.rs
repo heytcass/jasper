@@ -263,8 +263,8 @@ async fn set_api_key(key: String) -> Result<()> {
         let mut config = config_arc.write();
         config.ai.api_key = Some(key);
     }
-    // Save after releasing the lock
-    let config = config_arc.read();
+    // Clone config data before awaiting to avoid holding lock across await
+    let config = config_arc.read().clone();
     config.save().await.context("Failed to save configuration")?;
     
     println!("Claude API key updated successfully");
