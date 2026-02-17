@@ -48,7 +48,7 @@ Item {
     // ── Process: periodic poll ──
     Process {
         id: pollProc
-        command: ["jasper-companion-daemon-dev", "noctalia"]
+        command: ["jasper-companion-daemon", "noctalia"]
         running: false
         stdout: StdioCollector {
             onStreamFinished: root.parseOutput(this.text)
@@ -63,7 +63,7 @@ Item {
     // ── Process: force-refresh (separate so they don't collide) ──
     Process {
         id: refreshProc
-        command: ["jasper-companion-daemon-dev", "noctalia-refresh"]
+        command: ["jasper-companion-daemon", "noctalia-refresh"]
         running: false
         stdout: StdioCollector {
             onStreamFinished: {
