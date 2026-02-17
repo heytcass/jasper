@@ -65,6 +65,8 @@ enum Commands {
     NoctaliaRefresh,
     /// Authenticate with Google Calendar (OAuth2 flow)
     AuthGoogle,
+    /// List Google Calendars and choose which ones to sync
+    ListCalendars,
 }
 
 #[tokio::main]
@@ -91,6 +93,7 @@ async fn main() -> Result<()> {
         Commands::Noctalia => noctalia_mode().await,
         Commands::NoctaliaRefresh => noctalia_refresh_mode().await,
         Commands::AuthGoogle => auth_google().await,
+        Commands::ListCalendars => list_calendars().await,
     }
 }
 
@@ -373,5 +376,115 @@ async fn auth_google() -> Result<()> {
 
     println!("Google Calendar authentication successful!");
     println!("Token saved. Restart the daemon to begin syncing calendar events.");
+    Ok(())
+}
+
+async fn list_calendars() -> Result<()> {
+    let config_arc = Config::load().await.context("Failed to load configuration")?;
+
+    let gc = {
+        let config = config_arc.read();
+        config.google_calendar.as_ref()
+            .filter(|gc| gc.enabled && !gc.client_id.is_empty() && !gc.client_secret.is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Google Calendar is not configured. Set enabled=true, client_id, and client_secret in [google_calendar] section of config.toml"
+            ))?
+    };
+
+    let gcal_config = google_calendar::GoogleCalendarConfig {
+        client_id: gc.client_id,
+        client_secret: gc.client_secret,
+        redirect_uri: gc.redirect_uri,
+        calendar_ids: gc.calendar_ids.clone(),
+    };
+    let synced_ids: std::collections::HashSet<String> = gc.calendar_ids.into_iter().collect();
+
+    let data_dir = Config::get_data_dir()?;
+    let tz = config_arc.read().get_timezone();
+    let service = GoogleCalendarService::new(gcal_config, data_dir, tz);
+
+    println!("Fetching calendars from Google...");
+    let calendars = service.fetch_calendar_list().await
+        .context("Failed to fetch calendar list. Are you authenticated? Run 'auth-google' first.")?;
+
+    if calendars.is_empty() {
+        println!("No calendars found on this Google account.");
+        return Ok(());
+    }
+
+    // Build display labels and figure out which are pre-selected
+    let labels: Vec<String> = calendars.iter().map(|cal| {
+        let name = cal.summary.as_deref().unwrap_or("(unnamed)");
+        if cal.primary.unwrap_or(false) {
+            format!("{} (primary)", name)
+        } else {
+            name.to_string()
+        }
+    }).collect();
+
+    let defaults: Vec<bool> = calendars.iter().map(|cal| {
+        synced_ids.contains(&cal.id)
+            || (cal.primary.unwrap_or(false) && synced_ids.contains("primary"))
+    }).collect();
+
+    // Interactive checkbox selector
+    let selections = dialoguer::MultiSelect::new()
+        .with_prompt("Select calendars to sync (space to toggle, enter to confirm)")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact_opt()
+        .context("Calendar selection cancelled")?;
+
+    let Some(selections) = selections else {
+        println!("Cancelled, no changes made.");
+        return Ok(());
+    };
+
+    // Map selected indices back to calendar IDs
+    let new_calendar_ids: Vec<String> = selections.iter().map(|&i| {
+        let cal = &calendars[i];
+        if cal.primary.unwrap_or(false) {
+            "primary".to_string()
+        } else {
+            cal.id.clone()
+        }
+    }).collect();
+
+    // Check if anything actually changed
+    let old_set: std::collections::HashSet<&str> = synced_ids.iter().map(|s| s.as_str()).collect();
+    let new_set: std::collections::HashSet<&str> = new_calendar_ids.iter().map(|s| s.as_str()).collect();
+    if old_set == new_set {
+        println!("No changes made.");
+        return Ok(());
+    }
+
+    // Show what changed
+    for id in new_set.difference(&old_set) {
+        let name = calendars.iter()
+            .find(|c| c.id == *id || (*id == "primary" && c.primary.unwrap_or(false)))
+            .and_then(|c| c.summary.as_deref())
+            .unwrap_or(id);
+        println!("  + {}", name);
+    }
+    for id in old_set.difference(&new_set) {
+        let name = calendars.iter()
+            .find(|c| c.id == *id || (*id == "primary" && c.primary.unwrap_or(false)))
+            .and_then(|c| c.summary.as_deref())
+            .unwrap_or(id);
+        println!("  - {}", name);
+    }
+
+    // Save to config
+    {
+        let mut config = config_arc.write();
+        if let Some(ref mut gc) = config.google_calendar {
+            gc.calendar_ids = new_calendar_ids;
+        }
+    }
+    let config = config_arc.read().clone();
+    config.save().await.context("Failed to save configuration")?;
+
+    println!("\nConfiguration saved. Restart the daemon to apply changes.");
     Ok(())
 }

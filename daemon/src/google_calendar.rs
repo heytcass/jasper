@@ -47,6 +47,22 @@ struct GoogleEventsResponse {
     next_page_token: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GoogleCalendarListResponse {
+    items: Option<Vec<GoogleCalendarListEntry>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct GoogleCalendarListEntry {
+    pub id: String,
+    pub summary: Option<String>,
+    #[serde(rename = "accessRole")]
+    pub access_role: Option<String>,
+    pub primary: Option<bool>,
+    pub selected: Option<bool>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct GoogleEvent {
     id: Option<String>,
@@ -201,6 +217,37 @@ impl GoogleCalendarService {
         let total_events: usize = events_by_calendar.iter().map(|(_, events)| events.len()).sum();
         info!("Total events fetched from Google Calendar: {}", total_events);
         Ok(events_by_calendar)
+    }
+
+    /// Fetch the list of all calendars on the authenticated account
+    pub async fn fetch_calendar_list(&self) -> Result<Vec<GoogleCalendarListEntry>> {
+        let token = self.get_valid_token().await?;
+
+        let response = self.http_client
+            .get("https://www.googleapis.com/calendar/v3/users/me/calendarList")
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Google Calendar list API request failed: {}", e))?;
+
+        let response = handle_google_api_response(response).await?;
+        let list: GoogleCalendarListResponse = parse_json_response(response, "Google Calendar list response").await?;
+
+        let mut entries = list.items.unwrap_or_default();
+
+        // Sort: primary first, then alphabetically by summary
+        entries.sort_by(|a, b| {
+            let a_primary = a.primary.unwrap_or(false);
+            let b_primary = b.primary.unwrap_or(false);
+            b_primary.cmp(&a_primary)
+                .then_with(|| {
+                    let a_name = a.summary.as_deref().unwrap_or("");
+                    let b_name = b.summary.as_deref().unwrap_or("");
+                    a_name.to_lowercase().cmp(&b_name.to_lowercase())
+                })
+        });
+
+        Ok(entries)
     }
 
     /// Get a valid access token, refreshing if necessary
