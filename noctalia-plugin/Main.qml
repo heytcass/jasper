@@ -89,6 +89,7 @@ Item {
     function forceRefresh() {
         if (!refreshProc.running) {
             isRefreshing = true;
+            currentState = "waiting";
             refreshProc.running = true;
             pollTimer.restart();   // avoid double-hit right after
         }
