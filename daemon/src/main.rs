@@ -16,6 +16,7 @@ mod significance_engine;
 mod new_daemon_core;
 mod new_dbus_service;
 mod waybar_adapter;
+mod noctalia_adapter;
 
 use config::Config;
 use database::DatabaseInner;
@@ -58,6 +59,10 @@ enum Commands {
     Waybar,
     /// Check waybar status
     WaybarStatus,
+    /// Get insights for Noctalia bar widget (JSON output)
+    Noctalia,
+    /// Force refresh and get insights for Noctalia
+    NoctaliaRefresh,
     /// Authenticate with Google Calendar (OAuth2 flow)
     AuthGoogle,
 }
@@ -83,6 +88,8 @@ async fn main() -> Result<()> {
         Commands::SetApiKey { key } => set_api_key(key).await,
         Commands::Waybar => waybar_mode().await,
         Commands::WaybarStatus => waybar_status_mode().await,
+        Commands::Noctalia => noctalia_mode().await,
+        Commands::NoctaliaRefresh => noctalia_refresh_mode().await,
         Commands::AuthGoogle => auth_google().await,
     }
 }
@@ -272,6 +279,16 @@ async fn waybar_mode() -> Result<()> {
 async fn waybar_status_mode() -> Result<()> {
     waybar_adapter::waybar_status().await
         .map_err(|e| anyhow::anyhow!("Waybar status failed: {}", e))
+}
+
+async fn noctalia_mode() -> Result<()> {
+    noctalia_adapter::run_noctalia_mode().await
+        .map_err(|e| anyhow::anyhow!("Noctalia mode failed: {}", e))
+}
+
+async fn noctalia_refresh_mode() -> Result<()> {
+    noctalia_adapter::run_noctalia_refresh().await
+        .map_err(|e| anyhow::anyhow!("Noctalia refresh failed: {}", e))
 }
 
 async fn auth_google() -> Result<()> {

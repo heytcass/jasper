@@ -1,0 +1,23 @@
+{
+    "id": "jasper-insights",
+    "name": "Jasper AI Insights",
+    "version": "0.1.0",
+    "description": "AI-generated contextual insights from calendar, weather, and notes",
+    "minNoctaliaVersion": "4.4.1",
+    "author": "Tom",
+    "license": "MIT",
+    "tags": ["Productivity", "AI"],
+    "entryPoints": {
+        "main": "Main.qml",
+        "barWidget": "BarWidget.qml",
+        "panel": "Panel.qml"
+    },
+    "dependencies": {
+        "plugins": []
+    },
+    "metadata": {
+        "defaultSettings": {
+            "pollIntervalMs": 30000
+        }
+    }
+}
