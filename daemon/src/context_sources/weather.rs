@@ -1,14 +1,14 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 use super::{
-    ContextSource, ContextData, ContextDataType, ContextContent, WeatherContext, WeatherForecast
+    ContextContent, ContextData, ContextDataType, ContextSource, WeatherContext, WeatherForecast,
 };
 
 // ── Google Weather API response types ──────────────────────────────────
@@ -126,7 +126,13 @@ pub struct WeatherContextSource {
 }
 
 impl WeatherContextSource {
-    pub fn new(google_api_key: String, latitude: f64, longitude: f64, units: String, cache_duration_minutes: u32) -> Self {
+    pub fn new(
+        google_api_key: String,
+        latitude: f64,
+        longitude: f64,
+        units: String,
+        cache_duration_minutes: u32,
+    ) -> Self {
         let enabled = !google_api_key.is_empty();
         Self {
             google_api_key,
@@ -155,7 +161,11 @@ impl WeatherContextSource {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Google Weather currentConditions failed ({}): {}", status, body));
+            return Err(anyhow!(
+                "Google Weather currentConditions failed ({}): {}",
+                status,
+                body
+            ));
         }
 
         Ok(response.json().await?)
@@ -176,7 +186,11 @@ impl WeatherContextSource {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Google Weather forecast failed ({}): {}", status, body));
+            return Err(anyhow!(
+                "Google Weather forecast failed ({}): {}",
+                status,
+                body
+            ));
         }
 
         Ok(response.json().await?)
@@ -200,7 +214,11 @@ impl WeatherContextSource {
                 return Ok(AlertsResponse { alerts: None });
             }
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Google Weather alerts failed ({}): {}", status, body));
+            return Err(anyhow!(
+                "Google Weather alerts failed ({}): {}",
+                status,
+                body
+            ));
         }
 
         Ok(response.json().await?)
@@ -239,22 +257,29 @@ impl WeatherContextSource {
                 let high = day.max_temperature.as_ref()?.degrees? as f32;
                 let low = day.min_temperature.as_ref()?.degrees? as f32;
 
-                let conditions = day.daytime_forecast.as_ref()
+                let conditions = day
+                    .daytime_forecast
+                    .as_ref()
                     .and_then(|df| df.weather_condition.as_ref())
                     .and_then(|wc| wc.condition_type.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
 
-                let description = day.daytime_forecast.as_ref()
+                let description = day
+                    .daytime_forecast
+                    .as_ref()
                     .and_then(|df| df.weather_condition.as_ref())
                     .and_then(|wc| wc.description.as_ref())
                     .and_then(|d| d.text.clone())
                     .unwrap_or_else(|| conditions.clone());
 
-                let precip_chance = day.daytime_forecast.as_ref()
+                let precip_chance = day
+                    .daytime_forecast
+                    .as_ref()
                     .and_then(|df| df.precipitation.as_ref())
                     .and_then(|p| p.probability.as_ref())
                     .and_then(|pp| pp.percent)
-                    .unwrap_or(0) as f32 / 100.0;
+                    .unwrap_or(0) as f32
+                    / 100.0;
 
                 Some(WeatherForecast {
                     date,
@@ -271,7 +296,9 @@ impl WeatherContextSource {
     /// Fetch and assemble all weather data with TTL-based caching
     async fn fetch_weather_data(&self) -> Result<WeatherContext> {
         if !self.enabled {
-            return Err(anyhow!("Weather API not enabled (no Google API key configured)"));
+            return Err(anyhow!(
+                "Weather API not enabled (no Google API key configured)"
+            ));
         }
 
         // Return cached data if still fresh
@@ -280,7 +307,10 @@ impl WeatherContextSource {
             if let Some(ref cached) = *cache {
                 let age = Utc::now().signed_duration_since(cached.fetched_at);
                 if age.num_minutes() < self.cache_duration_minutes as i64 {
-                    debug!("Returning cached weather data ({} min old)", age.num_minutes());
+                    debug!(
+                        "Returning cached weather data ({} min old)",
+                        age.num_minutes()
+                    );
                     return Ok(cached.data.clone());
                 }
             }
@@ -307,40 +337,53 @@ impl WeatherContextSource {
 
         // Build current conditions string
         let unit = self.temp_unit();
-        let condition_text = current.weather_condition.as_ref()
+        let condition_text = current
+            .weather_condition
+            .as_ref()
             .and_then(|wc| wc.description.as_ref())
             .and_then(|d| d.text.clone())
             .unwrap_or_else(|| "Unknown conditions".to_string());
 
-        let temp = current.temperature.as_ref()
+        let temp = current
+            .temperature
+            .as_ref()
             .and_then(|t| t.degrees)
             .map(|d| format!("{:.0}{}", d, unit))
             .unwrap_or_default();
 
-        let feels_like = current.feels_like_temperature.as_ref()
+        let feels_like = current
+            .feels_like_temperature
+            .as_ref()
             .and_then(|t| t.degrees)
             .map(|d| format!(" (feels like {:.0}{})", d, unit))
             .unwrap_or_default();
 
-        let humidity = current.relative_humidity
+        let humidity = current
+            .relative_humidity
             .map(|h| format!(", {}% humidity", h))
             .unwrap_or_default();
 
         let current_conditions = format!("{}, {}{}{}", condition_text, temp, feels_like, humidity);
 
         // Convert forecast
-        let forecast = forecast_resp.forecast_days
+        let forecast = forecast_resp
+            .forecast_days
             .map(|days| self.convert_forecast(days))
             .unwrap_or_default();
 
         // Convert alerts
-        let mut alerts: Vec<String> = alerts_resp.alerts
+        let mut alerts: Vec<String> = alerts_resp
+            .alerts
             .unwrap_or_default()
             .into_iter()
             .filter_map(|a| {
                 let name = a.event_name?;
                 let severity = a.severity.unwrap_or_default();
-                Some(if severity.is_empty() { name } else { format!("{} ({})", name, severity) })
+                Some(if severity.is_empty() {
+                    name
+                } else {
+                    format!("{} ({})", name, severity)
+                })
             })
             .collect();
 
@@ -394,7 +437,11 @@ impl ContextSource for WeatherContextSource {
         self.enabled
     }
 
-    async fn fetch_context(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<ContextData> {
+    async fn fetch_context(
+        &self,
+        _start: DateTime<Utc>,
+        _end: DateTime<Utc>,
+    ) -> Result<ContextData> {
         info!("Fetching weather context from Google Weather API");
 
         let weather_context = self.fetch_weather_data().await?;
@@ -420,6 +467,10 @@ impl ContextSource for WeatherContextSource {
     }
 
     fn required_config(&self) -> Vec<String> {
-        vec!["google_api_key".to_string(), "latitude".to_string(), "longitude".to_string()]
+        vec![
+            "google_api_key".to_string(),
+            "latitude".to_string(),
+            "longitude".to_string(),
+        ]
     }
 }

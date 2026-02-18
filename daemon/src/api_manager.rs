@@ -1,11 +1,11 @@
-use chrono::{DateTime, Utc, Duration};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Duration, Utc};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use parking_lot::RwLock;
-use tracing::{debug, warn, info, error};
-use anyhow::{Result, anyhow};
-use std::time::{Duration as StdDuration};
+use std::time::Duration as StdDuration;
 use tokio::time::sleep;
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ApiCallStats {
@@ -49,8 +49,8 @@ impl Default for RateLimitConfig {
             daily_limit: 200,
             per_minute_limit: 10,
             max_retry_attempts: 3,
-            base_backoff_ms: 1000,      // 1 second base
-            max_backoff_ms: 60000,      // 60 seconds max
+            base_backoff_ms: 1000, // 1 second base
+            max_backoff_ms: 60000, // 60 seconds max
             circuit_failure_threshold: 5,
             circuit_recovery_timeout_minutes: 15,
         }
@@ -67,7 +67,7 @@ impl ApiManager {
     pub fn new() -> Self {
         Self::with_config(RateLimitConfig::default())
     }
-    
+
     pub fn with_config(config: RateLimitConfig) -> Self {
         let now = Utc::now();
         let stats = ApiCallStats {
@@ -93,18 +93,19 @@ impl ApiManager {
     pub fn can_make_api_call(&self) -> Result<(), RateLimitType> {
         let mut stats = self.stats.write();
         let now = Utc::now();
-        
+
         // Check if we're in backoff period due to failures
         if now < stats.next_allowed_attempt {
             let wait_seconds = (stats.next_allowed_attempt - now).num_seconds();
             debug!("API call blocked by backoff, wait {} seconds", wait_seconds);
             return Err(RateLimitType::Backoff);
         }
-        
+
         // Check circuit breaker
         if stats.consecutive_failures >= self.config.circuit_failure_threshold {
             if let Some(last_failure) = stats.last_failure {
-                let recovery_time = last_failure + Duration::minutes(self.config.circuit_recovery_timeout_minutes as i64);
+                let recovery_time = last_failure
+                    + Duration::minutes(self.config.circuit_recovery_timeout_minutes as i64);
                 if now < recovery_time {
                     debug!("Circuit breaker open, blocking API calls");
                     return Err(RateLimitType::CircuitBreaker);
@@ -115,32 +116,41 @@ impl ApiManager {
                 }
             }
         }
-        
+
         // Reset daily counter if it's a new day
         if now.date_naive() != stats.last_reset.date_naive() {
-            info!("Daily API call counter reset. Used {} calls yesterday.", stats.calls_today);
+            info!(
+                "Daily API call counter reset. Used {} calls yesterday.",
+                stats.calls_today
+            );
             stats.calls_today = 0;
             stats.last_reset = now;
         }
-        
+
         // Reset minute counter if it's a new minute
         if (now - stats.minute_reset).num_seconds() >= 60 {
             stats.calls_this_minute = 0;
             stats.minute_reset = now;
         }
-        
+
         // Check daily limit
         if stats.calls_today >= stats.daily_limit {
-            warn!("Daily API call limit reached ({}/{})", stats.calls_today, stats.daily_limit);
+            warn!(
+                "Daily API call limit reached ({}/{})",
+                stats.calls_today, stats.daily_limit
+            );
             return Err(RateLimitType::Daily);
         }
-        
+
         // Check per-minute limit
         if stats.calls_this_minute >= stats.per_minute_limit {
-            warn!("Per-minute API call limit reached ({}/{})", stats.calls_this_minute, stats.per_minute_limit);
+            warn!(
+                "Per-minute API call limit reached ({}/{})",
+                stats.calls_this_minute, stats.per_minute_limit
+            );
             return Err(RateLimitType::PerMinute);
         }
-        
+
         Ok(())
     }
 
@@ -150,49 +160,68 @@ impl ApiManager {
         stats.calls_this_minute += 1;
         stats.total_calls += 1;
         stats.total_tokens_used += tokens_used;
-        
-        debug!("API call recorded. Today: {}/{}, This minute: {}/{}, Total: {}, Tokens: {}", 
-               stats.calls_today, stats.daily_limit, stats.calls_this_minute, stats.per_minute_limit,
-               stats.total_calls, stats.total_tokens_used);
-        
+
+        debug!(
+            "API call recorded. Today: {}/{}, This minute: {}/{}, Total: {}, Tokens: {}",
+            stats.calls_today,
+            stats.daily_limit,
+            stats.calls_this_minute,
+            stats.per_minute_limit,
+            stats.total_calls,
+            stats.total_tokens_used
+        );
+
         // Warn when approaching limits
         if stats.calls_today >= (stats.daily_limit as f32 * 0.8) as u32 {
-            warn!("Approaching daily API limit: {}/{}", stats.calls_today, stats.daily_limit);
+            warn!(
+                "Approaching daily API limit: {}/{}",
+                stats.calls_today, stats.daily_limit
+            );
         }
         if stats.calls_this_minute >= (stats.per_minute_limit as f32 * 0.8) as u32 {
-            warn!("Approaching per-minute API limit: {}/{}", stats.calls_this_minute, stats.per_minute_limit);
+            warn!(
+                "Approaching per-minute API limit: {}/{}",
+                stats.calls_this_minute, stats.per_minute_limit
+            );
         }
     }
-    
+
     pub fn record_api_success(&self) {
         let mut stats = self.stats.write();
         if stats.consecutive_failures > 0 {
-            info!("API call succeeded after {} failures, resetting backoff", stats.consecutive_failures);
+            info!(
+                "API call succeeded after {} failures, resetting backoff",
+                stats.consecutive_failures
+            );
             stats.consecutive_failures = 0;
             stats.next_allowed_attempt = Utc::now();
         }
     }
-    
+
     pub fn record_api_failure(&self, error: &str) {
         let mut stats = self.stats.write();
         stats.consecutive_failures += 1;
         stats.last_failure = Some(Utc::now());
-        
+
         // Calculate exponential backoff
         let backoff_ms = std::cmp::min(
             self.config.base_backoff_ms * (2_u64.pow(stats.consecutive_failures.saturating_sub(1))),
             self.config.max_backoff_ms,
         );
-        
+
         stats.next_allowed_attempt = Utc::now() + Duration::milliseconds(backoff_ms as i64);
-        
-        warn!("API call failed (attempt {}): {}. Next attempt allowed in {}ms", 
-              stats.consecutive_failures, error, backoff_ms);
-        
+
+        warn!(
+            "API call failed (attempt {}): {}. Next attempt allowed in {}ms",
+            stats.consecutive_failures, error, backoff_ms
+        );
+
         // Log circuit breaker activation
         if stats.consecutive_failures >= self.config.circuit_failure_threshold {
-            error!("Circuit breaker activated after {} failures. Blocking API calls for {} minutes",
-                  stats.consecutive_failures, self.config.circuit_recovery_timeout_minutes);
+            error!(
+                "Circuit breaker activated after {} failures. Blocking API calls for {} minutes",
+                stats.consecutive_failures, self.config.circuit_recovery_timeout_minutes
+            );
         }
     }
 
@@ -205,7 +234,7 @@ impl ApiManager {
     {
         let mut attempt = 0;
         let max_attempts = self.config.max_retry_attempts;
-        
+
         loop {
             // Check rate limits before attempting
             match self.can_make_api_call() {
@@ -216,13 +245,16 @@ impl ApiManager {
                     return Err(anyhow!("Daily API limit exceeded"));
                 }
                 Err(RateLimitType::PerMinute) => {
-                    let wait_time = 60 - (Utc::now() - self.stats.read().minute_reset).num_seconds() + 1;
+                    let wait_time =
+                        60 - (Utc::now() - self.stats.read().minute_reset).num_seconds() + 1;
                     info!("Per-minute limit reached, waiting {} seconds", wait_time);
                     sleep(StdDuration::from_secs(wait_time as u64)).await;
                     continue;
                 }
                 Err(RateLimitType::Backoff) => {
-                    let wait_ms = (self.stats.read().next_allowed_attempt - Utc::now()).num_milliseconds().max(0);
+                    let wait_ms = (self.stats.read().next_allowed_attempt - Utc::now())
+                        .num_milliseconds()
+                        .max(0);
                     info!("Backoff active, waiting {}ms", wait_ms);
                     sleep(StdDuration::from_millis(wait_ms as u64)).await;
                     continue;
@@ -231,10 +263,10 @@ impl ApiManager {
                     return Err(anyhow!("Circuit breaker is open, API calls blocked"));
                 }
             }
-            
+
             attempt += 1;
             debug!("Attempting API call (attempt {}/{})", attempt, max_attempts);
-            
+
             match operation().await {
                 Ok(result) => {
                     self.record_api_success();
@@ -242,25 +274,27 @@ impl ApiManager {
                 }
                 Err(e) => {
                     self.record_api_failure(&e.to_string());
-                    
+
                     if attempt >= max_attempts {
                         error!("API call failed after {} attempts: {}", max_attempts, e);
                         return Err(e);
                     }
-                    
+
                     // Wait with exponential backoff before retry
                     let backoff_ms = std::cmp::min(
                         self.config.base_backoff_ms * (2_u64.pow(attempt - 1)),
                         self.config.max_backoff_ms,
                     );
-                    
-                    info!("Retrying in {}ms (attempt {}/{})", backoff_ms, attempt, max_attempts);
+
+                    info!(
+                        "Retrying in {}ms (attempt {}/{})",
+                        backoff_ms, attempt, max_attempts
+                    );
                     sleep(StdDuration::from_millis(backoff_ms)).await;
                 }
             }
         }
     }
-    
 }
 
 impl Default for ApiManager {
@@ -276,39 +310,45 @@ mod tests {
     #[test]
     fn test_daily_limit_enforcement() {
         let manager = ApiManager::new();
-        
+
         // Should allow calls initially
         assert!(manager.can_make_api_call().is_ok());
-        
+
         // Exhaust daily limit
         {
             let mut stats = manager.stats.write();
             stats.calls_today = stats.daily_limit;
         }
-        
+
         // Should deny further calls
-        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::Daily)));
+        assert!(matches!(
+            manager.can_make_api_call(),
+            Err(RateLimitType::Daily)
+        ));
     }
-    
+
     #[test]
     fn test_per_minute_limit_enforcement() {
         let manager = ApiManager::new();
-        
+
         // Exhaust per-minute limit
         {
             let mut stats = manager.stats.write();
             stats.calls_this_minute = stats.per_minute_limit;
         }
-        
+
         // Should deny further calls
-        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::PerMinute)));
+        assert!(matches!(
+            manager.can_make_api_call(),
+            Err(RateLimitType::PerMinute)
+        ));
     }
-    
+
     #[test]
     fn test_circuit_breaker() {
         let config = RateLimitConfig {
             circuit_failure_threshold: 2,
-            base_backoff_ms: 0,  // Disable backoff to test circuit breaker specifically
+            base_backoff_ms: 0, // Disable backoff to test circuit breaker specifically
             ..Default::default()
         };
         let manager = ApiManager::with_config(config);
@@ -318,7 +358,10 @@ mod tests {
         manager.record_api_failure("test error 2");
 
         // Circuit should be open — can_make_api_call reflects this
-        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::CircuitBreaker)));
+        assert!(matches!(
+            manager.can_make_api_call(),
+            Err(RateLimitType::CircuitBreaker)
+        ));
     }
 
     #[test]
@@ -329,6 +372,9 @@ mod tests {
         manager.record_api_failure("test error");
 
         // Should be in backoff period
-        assert!(matches!(manager.can_make_api_call(), Err(RateLimitType::Backoff)));
+        assert!(matches!(
+            manager.can_make_api_call(),
+            Err(RateLimitType::Backoff)
+        ));
     }
 }

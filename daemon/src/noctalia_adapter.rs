@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
-use tracing::{info, error, debug};
-use zbus::{Connection, proxy};
+use tracing::{debug, error, info};
+use zbus::{proxy, Connection};
 
 /// Noctalia adapter — connects to Jasper daemon via D-Bus and outputs
 /// JSON with separate fields for the Noctalia bar widget plugin.

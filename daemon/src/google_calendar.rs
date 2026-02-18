@@ -1,20 +1,19 @@
-use anyhow::{Result, anyhow};
-use chrono::{DateTime, TimeZone, Utc, Duration};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use oauth2::{
-    ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
-    AuthUrl, TokenUrl, TokenResponse,
-    basic::BasicClient, 
-    RefreshToken,
-    reqwest::async_http_client,
+    basic::BasicClient, reqwest::async_http_client, AuthUrl, ClientId, ClientSecret, CsrfToken,
+    RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::database::Event;
-use crate::http_utils::{handle_google_api_response, handle_oauth2_response_with_text, parse_json_response};
+use crate::http_utils::{
+    handle_google_api_response, handle_oauth2_response_with_text, parse_json_response,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCalendarConfig {
@@ -99,7 +98,11 @@ pub struct GoogleCalendarService {
 }
 
 impl GoogleCalendarService {
-    pub fn new(config: GoogleCalendarConfig, data_dir: PathBuf, user_timezone: chrono_tz::Tz) -> Self {
+    pub fn new(
+        config: GoogleCalendarConfig,
+        data_dir: PathBuf,
+        user_timezone: chrono_tz::Tz,
+    ) -> Self {
         let token_file_path = data_dir.join("google_calendar_token.json");
 
         Self {
@@ -131,13 +134,17 @@ impl GoogleCalendarService {
             ClientId::new(self.config.client_id.clone()),
             Some(ClientSecret::new(self.config.client_secret.clone())),
             AuthUrl::new("https://accounts.google.com/o/oauth2/auth".to_string())?,
-            Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?),
+            Some(TokenUrl::new(
+                "https://oauth2.googleapis.com/token".to_string(),
+            )?),
         )
         .set_redirect_uri(RedirectUrl::new(self.config.redirect_uri.clone())?);
 
         let (auth_url, csrf_token) = client
             .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new("https://www.googleapis.com/auth/calendar.readonly".to_string()))
+            .add_scope(Scope::new(
+                "https://www.googleapis.com/auth/calendar.readonly".to_string(),
+            ))
             .url();
 
         Ok((auth_url.to_string(), csrf_token))
@@ -146,33 +153,39 @@ impl GoogleCalendarService {
     /// Exchange authorization code for access token
     pub async fn authenticate_with_code(&self, auth_code: &str, _csrf_token: &str) -> Result<()> {
         debug!("Exchanging authorization code for access token using manual token exchange");
-        
+
         // Manual token exchange to avoid oauth2 crate parsing issues
         let token_response = self.exchange_code_manually(auth_code).await?;
 
         let stored_token = StoredToken {
             access_token: token_response.access_token,
             refresh_token: token_response.refresh_token,
-            expires_at: token_response.expires_in.map(|seconds| Utc::now() + Duration::seconds(seconds)),
+            expires_at: token_response
+                .expires_in
+                .map(|seconds| Utc::now() + Duration::seconds(seconds)),
             scopes: vec!["https://www.googleapis.com/auth/calendar.readonly".to_string()],
         };
 
         self.store_token(&stored_token).await?;
-        
+
         info!("Google Calendar authentication successful with custom REST API client");
         Ok(())
     }
 
     /// Refresh expired access token
     async fn refresh_token(&self, current_token: &StoredToken) -> Result<StoredToken> {
-        let refresh_token = current_token.refresh_token.as_ref()
+        let refresh_token = current_token
+            .refresh_token
+            .as_ref()
             .ok_or_else(|| anyhow!("No refresh token available"))?;
 
         let client = BasicClient::new(
             ClientId::new(self.config.client_id.clone()),
             Some(ClientSecret::new(self.config.client_secret.clone())),
             AuthUrl::new("https://accounts.google.com/o/oauth2/auth".to_string())?,
-            Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?),
+            Some(TokenUrl::new(
+                "https://oauth2.googleapis.com/token".to_string(),
+            )?),
         );
 
         let token_result = client
@@ -184,7 +197,9 @@ impl GoogleCalendarService {
         let new_token = StoredToken {
             access_token: token_result.access_token().secret().clone(),
             refresh_token: Some(refresh_token.clone()), // Keep existing refresh token
-            expires_at: token_result.expires_in().map(|d| Utc::now() + Duration::seconds(d.as_secs() as i64)),
+            expires_at: token_result
+                .expires_in()
+                .map(|d| Utc::now() + Duration::seconds(d.as_secs() as i64)),
             scopes: current_token.scopes.clone(),
         };
 
@@ -194,28 +209,48 @@ impl GoogleCalendarService {
     }
 
     /// Fetch events from Google Calendar using direct REST API
-    pub async fn fetch_events(&self, start_time: DateTime<Utc>, end_time: DateTime<Utc>) -> Result<Vec<(String, Vec<Event>)>> {
+    pub async fn fetch_events(
+        &self,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+    ) -> Result<Vec<(String, Vec<Event>)>> {
         let token = self.get_valid_token().await?;
         let mut events_by_calendar = Vec::new();
 
         // Fetch from each configured calendar
         for calendar_id in &self.config.calendar_ids {
             debug!("Fetching events from calendar: {}", calendar_id);
-            
-            match self.fetch_calendar_events_rest(&token.access_token, calendar_id, start_time, end_time).await {
+
+            match self
+                .fetch_calendar_events_rest(&token.access_token, calendar_id, start_time, end_time)
+                .await
+            {
                 Ok(events) => {
-                    info!("Fetched {} events from calendar {}", events.len(), calendar_id);
+                    info!(
+                        "Fetched {} events from calendar {}",
+                        events.len(),
+                        calendar_id
+                    );
                     events_by_calendar.push((calendar_id.clone(), events));
                 }
                 Err(e) => {
-                    warn!("Failed to fetch events from calendar {}: {}", calendar_id, e);
+                    warn!(
+                        "Failed to fetch events from calendar {}: {}",
+                        calendar_id, e
+                    );
                     // Continue with other calendars
                 }
             }
         }
 
-        let total_events: usize = events_by_calendar.iter().map(|(_, events)| events.len()).sum();
-        info!("Total events fetched from Google Calendar: {}", total_events);
+        let total_events: usize = events_by_calendar
+            .iter()
+            .map(|(_, events)| events.len())
+            .sum();
+        info!(
+            "Total events fetched from Google Calendar: {}",
+            total_events
+        );
         Ok(events_by_calendar)
     }
 
@@ -223,7 +258,8 @@ impl GoogleCalendarService {
     pub async fn fetch_calendar_list(&self) -> Result<Vec<GoogleCalendarListEntry>> {
         let token = self.get_valid_token().await?;
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get("https://www.googleapis.com/calendar/v3/users/me/calendarList")
             .bearer_auth(&token.access_token)
             .send()
@@ -231,7 +267,8 @@ impl GoogleCalendarService {
             .map_err(|e| anyhow!("Google Calendar list API request failed: {}", e))?;
 
         let response = handle_google_api_response(response).await?;
-        let list: GoogleCalendarListResponse = parse_json_response(response, "Google Calendar list response").await?;
+        let list: GoogleCalendarListResponse =
+            parse_json_response(response, "Google Calendar list response").await?;
 
         let mut entries = list.items.unwrap_or_default();
 
@@ -239,12 +276,11 @@ impl GoogleCalendarService {
         entries.sort_by(|a, b| {
             let a_primary = a.primary.unwrap_or(false);
             let b_primary = b.primary.unwrap_or(false);
-            b_primary.cmp(&a_primary)
-                .then_with(|| {
-                    let a_name = a.summary.as_deref().unwrap_or("");
-                    let b_name = b.summary.as_deref().unwrap_or("");
-                    a_name.to_lowercase().cmp(&b_name.to_lowercase())
-                })
+            b_primary.cmp(&a_primary).then_with(|| {
+                let a_name = a.summary.as_deref().unwrap_or("");
+                let b_name = b.summary.as_deref().unwrap_or("");
+                a_name.to_lowercase().cmp(&b_name.to_lowercase())
+            })
         });
 
         Ok(entries)
@@ -253,7 +289,7 @@ impl GoogleCalendarService {
     /// Get a valid access token, refreshing if necessary
     async fn get_valid_token(&self) -> Result<StoredToken> {
         let token = self.load_stored_token().await?;
-        
+
         // Check if token needs refresh
         if let Some(expires_at) = token.expires_at {
             if Utc::now() + Duration::minutes(5) >= expires_at {
@@ -261,7 +297,7 @@ impl GoogleCalendarService {
                 return self.refresh_token(&token).await;
             }
         }
-        
+
         Ok(token)
     }
 
@@ -273,7 +309,14 @@ impl GoogleCalendarService {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<Vec<Event>> {
-        self.fetch_calendar_events_rest_paginated(access_token, calendar_id, start_time, end_time, None).await
+        self.fetch_calendar_events_rest_paginated(
+            access_token,
+            calendar_id,
+            start_time,
+            end_time,
+            None,
+        )
+        .await
     }
 
     /// Fetch calendar events with pagination support and optional limits for memory management
@@ -293,7 +336,7 @@ impl GoogleCalendarService {
         let mut all_converted_events = Vec::new();
         let mut next_page_token: Option<String> = None;
         let page_size = 250; // Google Calendar API max
-        
+
         loop {
             let mut query_params = vec![
                 ("timeMin", start_time.to_rfc3339()),
@@ -302,13 +345,14 @@ impl GoogleCalendarService {
                 ("orderBy", "startTime".to_string()),
                 ("maxResults", page_size.to_string()),
             ];
-            
+
             // Add pagination token if we have one
             if let Some(ref token) = next_page_token {
                 query_params.push(("pageToken", token.clone()));
             }
 
-            let response = self.http_client
+            let response = self
+                .http_client
                 .get(&url)
                 .bearer_auth(access_token)
                 .query(&query_params)
@@ -317,14 +361,18 @@ impl GoogleCalendarService {
                 .map_err(|e| anyhow!("Google Calendar API request failed: {}", e))?;
 
             let response = handle_google_api_response(response).await?;
-            let events_response: GoogleEventsResponse = parse_json_response(response, "Google Calendar events response").await?;
+            let events_response: GoogleEventsResponse =
+                parse_json_response(response, "Google Calendar events response").await?;
 
             // Process events from this page
             if let Some(items) = events_response.items {
                 for gcal_event in items {
-                    if let Ok(event) = self.convert_google_event_rest(gcal_event, calendar_id).await {
+                    if let Ok(event) = self
+                        .convert_google_event_rest(gcal_event, calendar_id)
+                        .await
+                    {
                         all_converted_events.push(event);
-                        
+
                         // Check if we've reached the maximum number of events
                         if let Some(max) = max_events {
                             if all_converted_events.len() >= max {
@@ -352,14 +400,19 @@ impl GoogleCalendarService {
     ) -> Result<Event> {
         // Serialize the raw data first before we start moving fields
         let raw_data = serde_json::to_string(&gcal_event)?;
-        
-        let source_id = gcal_event.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        let source_id = gcal_event
+            .id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let title = gcal_event.summary.clone();
         let description = gcal_event.description.clone();
         let location = gcal_event.location.clone();
 
         // Detect if this is an all-day event
-        let is_all_day = gcal_event.start.as_ref()
+        let is_all_day = gcal_event
+            .start
+            .as_ref()
             .map(|start| start.date.is_some() && start.date_time.is_none())
             .unwrap_or(false);
 
@@ -374,9 +427,11 @@ impl GoogleCalendarService {
                 // then convert to UTC so the stored timestamp reflects the correct instant.
                 let naive_date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
                     .map_err(|e| anyhow!("Invalid start date: {}", e))?;
-                let naive_datetime = naive_date.and_hms_opt(0, 0, 0)
+                let naive_datetime = naive_date
+                    .and_hms_opt(0, 0, 0)
                     .ok_or_else(|| anyhow!("Invalid date"))?;
-                self.user_timezone.from_local_datetime(&naive_datetime)
+                self.user_timezone
+                    .from_local_datetime(&naive_datetime)
                     .earliest()
                     .ok_or_else(|| anyhow!("Ambiguous local time for all-day event start"))?
                     .with_timezone(&Utc)
@@ -390,20 +445,26 @@ impl GoogleCalendarService {
         // Handle end time
         let end_time = if let Some(end) = &gcal_event.end {
             if let Some(datetime_str) = &end.date_time {
-                Some(DateTime::parse_from_rfc3339(datetime_str)
-                    .map_err(|e| anyhow!("Invalid end datetime: {}", e))?
-                    .with_timezone(&Utc))
+                Some(
+                    DateTime::parse_from_rfc3339(datetime_str)
+                        .map_err(|e| anyhow!("Invalid end datetime: {}", e))?
+                        .with_timezone(&Utc),
+                )
             } else if let Some(date_str) = &end.date {
                 // All-day event end — Google uses exclusive end dates (a 1-day event on
                 // Feb 15 has end = "2026-02-16"). Interpret as local midnight, then to UTC.
                 let naive_date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
                     .map_err(|e| anyhow!("Invalid end date: {}", e))?;
-                let naive_datetime = naive_date.and_hms_opt(0, 0, 0)
+                let naive_datetime = naive_date
+                    .and_hms_opt(0, 0, 0)
                     .ok_or_else(|| anyhow!("Invalid date"))?;
-                Some(self.user_timezone.from_local_datetime(&naive_datetime)
-                    .earliest()
-                    .ok_or_else(|| anyhow!("Ambiguous local time for all-day event end"))?
-                    .with_timezone(&Utc))
+                Some(
+                    self.user_timezone
+                        .from_local_datetime(&naive_datetime)
+                        .earliest()
+                        .ok_or_else(|| anyhow!("Ambiguous local time for all-day event end"))?
+                        .with_timezone(&Utc),
+                )
             } else {
                 None
             }
@@ -412,9 +473,8 @@ impl GoogleCalendarService {
         };
 
         let participants = if let Some(attendees) = &gcal_event.attendees {
-            let attendee_emails: Vec<String> = attendees.iter()
-                .filter_map(|a| a.email.clone())
-                .collect();
+            let attendee_emails: Vec<String> =
+                attendees.iter().filter_map(|a| a.email.clone()).collect();
             if !attendee_emails.is_empty() {
                 Some(serde_json::to_string(&attendee_emails)?)
             } else {
@@ -455,9 +515,12 @@ impl GoogleCalendarService {
 
     /// Manual token exchange to avoid oauth2 crate JSON parsing issues
     async fn exchange_code_manually(&self, auth_code: &str) -> Result<GoogleTokenResponse> {
-        debug!("Manual token exchange called with auth_code length: {}", auth_code.len());
+        debug!(
+            "Manual token exchange called with auth_code length: {}",
+            auth_code.len()
+        );
         let client = reqwest::Client::new();
-        
+
         let params = [
             ("client_id", &self.config.client_id),
             ("client_secret", &self.config.client_secret),
@@ -478,8 +541,14 @@ impl GoogleCalendarService {
         let response_text = handle_oauth2_response_with_text(response).await?;
         debug!("Raw Google token response: {}", response_text);
 
-        let token_response: GoogleTokenResponse = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow!("Failed to parse token response: {} - Raw response: {}", e, response_text))?;
+        let token_response: GoogleTokenResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                anyhow!(
+                    "Failed to parse token response: {} - Raw response: {}",
+                    e,
+                    response_text
+                )
+            })?;
 
         debug!("Token exchange successful, received access token");
         Ok(token_response)

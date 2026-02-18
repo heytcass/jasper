@@ -1,34 +1,34 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Only import what we need for the simplified architecture
+mod api_manager;
 mod config;
+mod context_sources;
 mod database;
 mod errors;
-mod api_manager;
 mod google_calendar;
 mod http_utils;
-mod context_sources;
-mod sops_integration;
-mod significance_engine;
 mod new_daemon_core;
 mod new_dbus_service;
-mod waybar_adapter;
 mod noctalia_adapter;
+mod significance_engine;
+mod sops_integration;
+mod waybar_adapter;
 
+use api_manager::ApiManager;
 use config::Config;
+use context_sources::weather::WeatherContextSource;
+use context_sources::ContextSourceManager;
 use database::DatabaseInner;
+use google_calendar::GoogleCalendarService;
 use new_daemon_core::SimplifiedDaemonCore;
 use new_dbus_service::SimplifiedDbusService;
-use context_sources::ContextSourceManager;
-use context_sources::weather::WeatherContextSource;
-use google_calendar::GoogleCalendarService;
-use api_manager::ApiManager;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 
 #[derive(Parser)]
 #[command(name = "jasper-daemon")]
@@ -36,7 +36,7 @@ use tokio::io::AsyncWriteExt;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    
+
     /// Enable debug logging
     #[arg(short, long)]
     debug: bool,
@@ -101,11 +101,14 @@ async fn start_daemon() -> Result<()> {
     info!("Starting Jasper simplified daemon");
 
     // Load configuration
-    let config_arc = Config::load().await.context("Failed to load configuration")?;
+    let config_arc = Config::load()
+        .await
+        .context("Failed to load configuration")?;
 
     // Initialize database
     let db_path = Config::get_data_dir()?.join("jasper.db");
-    let database = DatabaseInner::new(&db_path).await
+    let database = DatabaseInner::new(&db_path)
+        .await
         .context("Failed to initialize database")?;
 
     // Initialize context source manager
@@ -124,7 +127,10 @@ async fn start_daemon() -> Result<()> {
                     weather_config.cache_duration_minutes,
                 );
                 context_manager.add_source(Box::new(weather_source));
-                info!("Weather context source registered ({}, {})", weather_config.latitude, weather_config.longitude);
+                info!(
+                    "Weather context source registered ({}, {})",
+                    weather_config.latitude, weather_config.longitude
+                );
             }
         }
     }
@@ -154,12 +160,16 @@ async fn start_daemon() -> Result<()> {
     let api_manager = ApiManager::new();
 
     // Create the simplified daemon core
-    let daemon_core = Arc::new(RwLock::new(
-        SimplifiedDaemonCore::new(database, context_manager, api_manager, config_arc, calendar_service)
-    ));
-    
+    let daemon_core = Arc::new(RwLock::new(SimplifiedDaemonCore::new(
+        database,
+        context_manager,
+        api_manager,
+        config_arc,
+        calendar_service,
+    )));
+
     info!("Simplified daemon core created");
-    
+
     // Start D-Bus service in background
     let dbus_daemon = daemon_core.clone();
     let dbus_handle = tokio::spawn(async move {
@@ -175,17 +185,19 @@ async fn start_daemon() -> Result<()> {
     {
         let daemon = daemon_core.read().await;
         if let Err(e) = daemon.init_signal_emitter().await {
-            warn!("Could not initialize signal emitter (frontends will use polling): {}", e);
+            warn!(
+                "Could not initialize signal emitter (frontends will use polling): {}",
+                e
+            );
         }
     }
 
     // Start the main daemon loop in a separate task
     // Using start_with_arc to avoid holding lock for entire runtime
     let daemon_core_clone = daemon_core.clone();
-    let daemon_handle = tokio::spawn(async move {
-        SimplifiedDaemonCore::start_with_arc(daemon_core_clone).await
-    });
-    
+    let daemon_handle =
+        tokio::spawn(async move { SimplifiedDaemonCore::start_with_arc(daemon_core_clone).await });
+
     // Wait for either the daemon or D-Bus service to finish
     tokio::select! {
         result = daemon_handle => {
@@ -197,7 +209,7 @@ async fn start_daemon() -> Result<()> {
             info!("D-Bus service stopped");
         }
     }
-    
+
     info!("Simplified daemon stopped");
     Ok(())
 }
@@ -225,7 +237,10 @@ async fn show_status() -> Result<()> {
         Ok(reply) => {
             let (is_running, active_frontends, insights_count): (bool, u32, i64) =
                 reply.body().deserialize()?;
-            println!("Daemon Status: {}", if is_running { "Running" } else { "Stopped" });
+            println!(
+                "Daemon Status: {}",
+                if is_running { "Running" } else { "Stopped" }
+            );
             println!("  Active frontends: {}", active_frontends);
             println!("  Total insights:   {}", insights_count);
         }
@@ -237,7 +252,8 @@ async fn show_status() -> Result<()> {
 }
 
 async fn stop_daemon() -> Result<()> {
-    let connection = zbus::Connection::session().await
+    let connection = zbus::Connection::session()
+        .await
         .context("Failed to connect to D-Bus session bus")?;
 
     match connection
@@ -251,7 +267,9 @@ async fn stop_daemon() -> Result<()> {
         .await
     {
         Ok(_) => {
-            println!("Daemon is running. Use 'systemctl --user stop jasper-daemon' or send SIGTERM.");
+            println!(
+                "Daemon is running. Use 'systemctl --user stop jasper-daemon' or send SIGTERM."
+            );
         }
         Err(_) => {
             println!("Daemon is not running.");
@@ -261,41 +279,52 @@ async fn stop_daemon() -> Result<()> {
 }
 
 async fn set_api_key(key: String) -> Result<()> {
-    let config_arc = Config::load().await.context("Failed to load configuration")?;
+    let config_arc = Config::load()
+        .await
+        .context("Failed to load configuration")?;
     {
         let mut config = config_arc.write();
         config.ai.api_key = Some(key);
     }
     // Clone config data before awaiting to avoid holding lock across await
     let config = config_arc.read().clone();
-    config.save().await.context("Failed to save configuration")?;
-    
+    config
+        .save()
+        .await
+        .context("Failed to save configuration")?;
+
     println!("Claude API key updated successfully");
     Ok(())
 }
 
 async fn waybar_mode() -> Result<()> {
-    waybar_adapter::run_waybar_mode().await
+    waybar_adapter::run_waybar_mode()
+        .await
         .map_err(|e| anyhow::anyhow!("Waybar mode failed: {}", e))
 }
 
 async fn waybar_status_mode() -> Result<()> {
-    waybar_adapter::waybar_status().await
+    waybar_adapter::waybar_status()
+        .await
         .map_err(|e| anyhow::anyhow!("Waybar status failed: {}", e))
 }
 
 async fn noctalia_mode() -> Result<()> {
-    noctalia_adapter::run_noctalia_mode().await
+    noctalia_adapter::run_noctalia_mode()
+        .await
         .map_err(|e| anyhow::anyhow!("Noctalia mode failed: {}", e))
 }
 
 async fn noctalia_refresh_mode() -> Result<()> {
-    noctalia_adapter::run_noctalia_refresh().await
+    noctalia_adapter::run_noctalia_refresh()
+        .await
         .map_err(|e| anyhow::anyhow!("Noctalia refresh failed: {}", e))
 }
 
 async fn auth_google() -> Result<()> {
-    let config_arc = Config::load().await.context("Failed to load configuration")?;
+    let config_arc = Config::load()
+        .await
+        .context("Failed to load configuration")?;
 
     let gc = {
         let config = config_arc.read();
@@ -325,7 +354,8 @@ async fn auth_google() -> Result<()> {
         return Ok(());
     }
 
-    let (auth_url, csrf_token) = service.get_auth_url()
+    let (auth_url, csrf_token) = service
+        .get_auth_url()
         .context("Failed to generate OAuth URL")?;
 
     println!("Open this URL in your browser to authorize Jasper:\n");
@@ -333,27 +363,36 @@ async fn auth_google() -> Result<()> {
     println!("Waiting for callback on {} ...", gc.redirect_uri);
 
     // Try to open the URL automatically
-    let _ = std::process::Command::new("xdg-open").arg(&auth_url).spawn();
+    let _ = std::process::Command::new("xdg-open")
+        .arg(&auth_url)
+        .spawn();
 
     // Start one-shot callback server on 127.0.0.1:8080
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
+        .await
         .context("Failed to bind to 127.0.0.1:8080 - is another process using this port?")?;
 
-    let (mut stream, _addr) = listener.accept().await
+    let (mut stream, _addr) = listener
+        .accept()
+        .await
         .context("Failed to accept callback connection")?;
 
     // Read the HTTP request
     let mut buf = vec![0u8; 4096];
-    let n = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await
+    let n = tokio::io::AsyncReadExt::read(&mut stream, &mut buf)
+        .await
         .context("Failed to read callback request")?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
     // Parse the request line to extract query params: GET /auth/callback?code=...&state=... HTTP/1.1
-    let code = request.lines().next()
-        .and_then(|line| line.split_whitespace().nth(1))  // "/auth/callback?code=...&state=..."
-        .and_then(|path| path.split('?').nth(1))          // "code=...&state=..."
+    let code = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1)) // "/auth/callback?code=...&state=..."
+        .and_then(|path| path.split('?').nth(1)) // "code=...&state=..."
         .and_then(|query| {
-            query.split('&')
+            query
+                .split('&')
                 .find_map(|param| param.strip_prefix("code="))
         })
         .map(|c| c.to_string())
@@ -371,7 +410,9 @@ async fn auth_google() -> Result<()> {
 
     // Exchange the code for a token
     println!("Authorization code received, exchanging for token...");
-    service.authenticate_with_code(&code, csrf_token.secret()).await
+    service
+        .authenticate_with_code(&code, csrf_token.secret())
+        .await
         .context("Failed to exchange authorization code for token")?;
 
     println!("Google Calendar authentication successful!");
@@ -380,7 +421,9 @@ async fn auth_google() -> Result<()> {
 }
 
 async fn list_calendars() -> Result<()> {
-    let config_arc = Config::load().await.context("Failed to load configuration")?;
+    let config_arc = Config::load()
+        .await
+        .context("Failed to load configuration")?;
 
     let gc = {
         let config = config_arc.read();
@@ -405,8 +448,9 @@ async fn list_calendars() -> Result<()> {
     let service = GoogleCalendarService::new(gcal_config, data_dir, tz);
 
     println!("Fetching calendars from Google...");
-    let calendars = service.fetch_calendar_list().await
-        .context("Failed to fetch calendar list. Are you authenticated? Run 'auth-google' first.")?;
+    let calendars = service.fetch_calendar_list().await.context(
+        "Failed to fetch calendar list. Are you authenticated? Run 'auth-google' first.",
+    )?;
 
     if calendars.is_empty() {
         println!("No calendars found on this Google account.");
@@ -414,19 +458,25 @@ async fn list_calendars() -> Result<()> {
     }
 
     // Build display labels and figure out which are pre-selected
-    let labels: Vec<String> = calendars.iter().map(|cal| {
-        let name = cal.summary.as_deref().unwrap_or("(unnamed)");
-        if cal.primary.unwrap_or(false) {
-            format!("{} (primary)", name)
-        } else {
-            name.to_string()
-        }
-    }).collect();
+    let labels: Vec<String> = calendars
+        .iter()
+        .map(|cal| {
+            let name = cal.summary.as_deref().unwrap_or("(unnamed)");
+            if cal.primary.unwrap_or(false) {
+                format!("{} (primary)", name)
+            } else {
+                name.to_string()
+            }
+        })
+        .collect();
 
-    let defaults: Vec<bool> = calendars.iter().map(|cal| {
-        synced_ids.contains(&cal.id)
-            || (cal.primary.unwrap_or(false) && synced_ids.contains("primary"))
-    }).collect();
+    let defaults: Vec<bool> = calendars
+        .iter()
+        .map(|cal| {
+            synced_ids.contains(&cal.id)
+                || (cal.primary.unwrap_or(false) && synced_ids.contains("primary"))
+        })
+        .collect();
 
     // Interactive checkbox selector
     let selections = dialoguer::MultiSelect::new()
@@ -442,18 +492,22 @@ async fn list_calendars() -> Result<()> {
     };
 
     // Map selected indices back to calendar IDs
-    let new_calendar_ids: Vec<String> = selections.iter().map(|&i| {
-        let cal = &calendars[i];
-        if cal.primary.unwrap_or(false) {
-            "primary".to_string()
-        } else {
-            cal.id.clone()
-        }
-    }).collect();
+    let new_calendar_ids: Vec<String> = selections
+        .iter()
+        .map(|&i| {
+            let cal = &calendars[i];
+            if cal.primary.unwrap_or(false) {
+                "primary".to_string()
+            } else {
+                cal.id.clone()
+            }
+        })
+        .collect();
 
     // Check if anything actually changed
     let old_set: std::collections::HashSet<&str> = synced_ids.iter().map(|s| s.as_str()).collect();
-    let new_set: std::collections::HashSet<&str> = new_calendar_ids.iter().map(|s| s.as_str()).collect();
+    let new_set: std::collections::HashSet<&str> =
+        new_calendar_ids.iter().map(|s| s.as_str()).collect();
     if old_set == new_set {
         println!("No changes made.");
         return Ok(());
@@ -461,14 +515,16 @@ async fn list_calendars() -> Result<()> {
 
     // Show what changed
     for id in new_set.difference(&old_set) {
-        let name = calendars.iter()
+        let name = calendars
+            .iter()
             .find(|c| c.id == *id || (*id == "primary" && c.primary.unwrap_or(false)))
             .and_then(|c| c.summary.as_deref())
             .unwrap_or(id);
         println!("  + {}", name);
     }
     for id in old_set.difference(&new_set) {
-        let name = calendars.iter()
+        let name = calendars
+            .iter()
             .find(|c| c.id == *id || (*id == "primary" && c.primary.unwrap_or(false)))
             .and_then(|c| c.summary.as_deref())
             .unwrap_or(id);
@@ -483,7 +539,10 @@ async fn list_calendars() -> Result<()> {
         }
     }
     let config = config_arc.read().clone();
-    config.save().await.context("Failed to save configuration")?;
+    config
+        .save()
+        .await
+        .context("Failed to save configuration")?;
 
     println!("\nConfiguration saved. Restart the daemon to apply changes.");
     Ok(())

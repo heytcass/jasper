@@ -7,34 +7,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod obsidian;
-pub mod weather;
 pub mod tasks;
+pub mod weather;
 
 /// Core trait for all context sources
 #[async_trait]
 pub trait ContextSource: Send + Sync {
     /// Get the unique identifier for this context source
     fn source_id(&self) -> &str;
-    
+
     /// Get the display name for this context source
     fn display_name(&self) -> &str;
-    
+
     /// Check if this context source is enabled and configured
     fn is_enabled(&self) -> bool;
-    
+
     /// Fetch context data for the given time range
     async fn fetch_context(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<ContextData>;
-    
+
     /// Get the priority of this context source (higher = more important)
     fn priority(&self) -> i32 {
         100 // Default priority
     }
-    
+
     /// Get configuration requirements for this source
     fn required_config(&self) -> Vec<String> {
         vec![]
     }
-    
+
     /// Validate configuration for this source
     fn validate_config(&self, config: &HashMap<String, String>) -> Result<()> {
         // Check required config keys
@@ -190,12 +190,12 @@ impl ContextSourceManager {
             sources: Vec::new(),
         }
     }
-    
+
     /// Add a context source
     pub fn add_source(&mut self, source: Box<dyn ContextSource>) {
         self.sources.push(source);
     }
-    
+
     /// Get all enabled context sources
     pub fn get_enabled_sources(&self) -> Vec<&dyn ContextSource> {
         self.sources
@@ -204,11 +204,15 @@ impl ContextSourceManager {
             .map(|s| s.as_ref())
             .collect()
     }
-    
+
     /// Fetch context from all enabled sources
-    pub async fn fetch_all_context(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<ContextData>> {
+    pub async fn fetch_all_context(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<ContextData>> {
         let mut all_context = Vec::new();
-        
+
         for source in self.get_enabled_sources() {
             match source.fetch_context(start, end).await {
                 Ok(context) => all_context.push(context),
@@ -217,13 +221,12 @@ impl ContextSourceManager {
                 }
             }
         }
-        
+
         // Sort by priority (higher priority first)
         all_context.sort_by(|a, b| b.priority.cmp(&a.priority));
-        
+
         Ok(all_context)
     }
-    
 }
 
 impl Default for ContextSourceManager {

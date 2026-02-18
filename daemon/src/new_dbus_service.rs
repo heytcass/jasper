@@ -1,10 +1,10 @@
-use crate::new_daemon_core::SimplifiedDaemonCore;
 use crate::errors::JasperResult;
+use crate::new_daemon_core::SimplifiedDaemonCore;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, debug, warn, error};
-use zbus::{Connection, ConnectionBuilder, SignalContext, interface};
+use tracing::{debug, error, info, warn};
+use zbus::{interface, Connection, ConnectionBuilder, SignalContext};
 
 /// Simplified D-Bus service for frontend communication
 pub struct SimplifiedDbusService {
@@ -19,7 +19,7 @@ impl SimplifiedDbusService {
     /// Start the D-Bus service
     pub async fn start(daemon: Arc<RwLock<SimplifiedDaemonCore>>) -> JasperResult<()> {
         let service = SimplifiedDbusService::new(daemon);
-        
+
         let _connection = ConnectionBuilder::session()
             .unwrap()
             .name("org.jasper.Daemon")?
@@ -28,7 +28,7 @@ impl SimplifiedDbusService {
             .await?;
 
         info!("D-Bus service started at org.jasper.Daemon");
-        
+
         // Keep the service running
         std::future::pending::<()>().await;
         Ok(())
@@ -94,10 +94,18 @@ impl SimplifiedDbusService {
     /// Register a frontend as active
     async fn register_frontend(&self, frontend_id: String, pid: i32) -> bool {
         let pid_option = if pid > 0 { Some(pid) } else { None };
-        
-        match self.daemon.read().await.register_frontend(&frontend_id, pid_option) {
+
+        match self
+            .daemon
+            .read()
+            .await
+            .register_frontend(&frontend_id, pid_option)
+        {
             Ok(()) => {
-                info!("Frontend registered: {} (PID: {:?})", frontend_id, pid_option);
+                info!(
+                    "Frontend registered: {} (PID: {:?})",
+                    frontend_id, pid_option
+                );
                 true
             }
             Err(e) => {
@@ -123,7 +131,12 @@ impl SimplifiedDbusService {
 
     /// Update frontend heartbeat
     async fn heartbeat(&self, frontend_id: String) -> bool {
-        match self.daemon.read().await.update_frontend_heartbeat(&frontend_id) {
+        match self
+            .daemon
+            .read()
+            .await
+            .update_frontend_heartbeat(&frontend_id)
+        {
             Ok(()) => {
                 debug!("Heartbeat updated for frontend: {}", frontend_id);
                 true
@@ -166,7 +179,7 @@ impl SimplifiedDbusService {
 
     // TODO: Add signal methods
     // These would be called by the daemon when new insights are available
-    
+
     /// Signal emitted when a new insight is available
     #[zbus(signal)]
     async fn insight_updated(
@@ -175,7 +188,7 @@ impl SimplifiedDbusService {
         emoji: String,
         preview: String,
     ) -> zbus::Result<()>;
-    
+
     /// Signal emitted when daemon is stopping
     #[zbus(signal)]
     async fn daemon_stopping(signal_ctxt: &SignalContext<'_>) -> zbus::Result<()>;
@@ -201,7 +214,7 @@ impl DbusSignalEmitter {
     ) -> JasperResult<()> {
         let object_path = "/org/jasper/Daemon";
         let interface_name = "org.jasper.Daemon1";
-        
+
         self.connection
             .emit_signal(
                 None::<&str>,
@@ -211,7 +224,7 @@ impl DbusSignalEmitter {
                 &(insight_id, emoji, preview),
             )
             .await?;
-            
+
         debug!("Emitted InsightUpdated signal for insight {}", insight_id);
         Ok(())
     }
@@ -221,7 +234,7 @@ impl DbusSignalEmitter {
     pub async fn emit_daemon_stopping(&self) -> JasperResult<()> {
         let object_path = "/org/jasper/Daemon";
         let interface_name = "org.jasper.Daemon1";
-        
+
         self.connection
             .emit_signal(
                 None::<&str>,
@@ -231,7 +244,7 @@ impl DbusSignalEmitter {
                 &(),
             )
             .await?;
-            
+
         info!("Emitted DaemonStopping signal");
         Ok(())
     }
