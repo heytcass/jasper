@@ -88,7 +88,7 @@ impl Default for Config {
                 timezone: "America/Detroit".to_string(),
             },
             ai: AiConfig {
-                model: "claude-sonnet-4-5".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
                 api_key: None, // Falls back to ANTHROPIC_API_KEY environment variable
             },
             personality: PersonalityConfig {
