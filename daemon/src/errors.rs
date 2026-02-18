@@ -7,30 +7,27 @@ pub enum JasperError {
     /// Configuration errors
     #[error("Configuration error: {message}")]
     Config { message: String },
-    
+
     /// Database operation errors
     #[error("Database error: {operation} failed: {message}")]
-    Database {
-        operation: String,
-        message: String,
-    },
-    
+    Database { operation: String, message: String },
+
     /// Calendar synchronization errors
     #[error("Calendar sync error: {message}")]
     CalendarSync { message: String },
-    
+
     /// Authentication errors
     #[error("Authentication error: {service} authentication failed: {message}")]
     Authentication { service: String, message: String },
-    
+
     /// API call errors (Claude AI, Google Calendar, etc.)
     #[error("API error: {service} API call failed: {message}")]
     Api { service: String, message: String },
-    
+
     /// Network connectivity errors
     #[error("Network error: {message}")]
     Network { message: String },
-    
+
     /// File system errors
     #[error("File system error: {operation} failed for path '{path}': {message}")]
     FileSystem {
@@ -38,29 +35,26 @@ pub enum JasperError {
         path: String,
         message: String,
     },
-    
+
     /// Parsing errors (JSON, TOML, etc.)
     #[error("Parsing error: Failed to parse {format}: {message}")]
-    Parsing {
-        format: String,
-        message: String,
-    },
-    
+    Parsing { format: String, message: String },
+
     /// Timeout errors
     #[error("Timeout error: {operation} timed out after {timeout_seconds}s")]
     Timeout {
         operation: String,
         timeout_seconds: u64,
     },
-    
+
     /// Validation errors
     #[error("Validation error: {field} is invalid: {message}")]
     Validation { field: String, message: String },
-    
+
     /// Service unavailable errors
     #[error("Service unavailable: {service} is not configured or not available")]
     ServiceUnavailable { service: String },
-    
+
     /// Internal errors that shouldn't happen
     #[error("Internal error: {message}")]
     Internal { message: String },

@@ -1,17 +1,19 @@
-use crate::errors::JasperResult;
-use crate::database::{Database, Insight};
-use crate::significance_engine::{SignificanceEngine, SignificantChange, ContextSnapshot as ContextSnapshotSummary};
-use crate::context_sources::{self, ContextSourceManager};
 use crate::api_manager::ApiManager;
 use crate::config::Config;
+use crate::context_sources::{self, ContextSourceManager};
+use crate::database::{Database, Insight};
+use crate::errors::JasperResult;
 use crate::google_calendar::GoogleCalendarService;
 use crate::new_dbus_service::DbusSignalEmitter;
+use crate::significance_engine::{
+    ContextSnapshot as ContextSnapshotSummary, SignificanceEngine, SignificantChange,
+};
 
-use std::sync::Arc;
+use chrono::{DateTime, Timelike, Utc};
 use parking_lot::RwLock;
-use tokio::time::{Duration, interval};
-use tracing::{info, debug, warn, error};
-use chrono::{DateTime, Utc, Timelike};
+use std::sync::Arc;
+use tokio::time::{interval, Duration};
+use tracing::{debug, error, info, warn};
 
 // Trait to detect emoji characters
 trait EmojiChar {
@@ -71,7 +73,9 @@ impl SimplifiedDaemonCore {
     ) -> Self {
         let calendar_sync_interval = {
             let cfg = config.read();
-            let minutes = cfg.google_calendar.as_ref()
+            let minutes = cfg
+                .google_calendar
+                .as_ref()
                 .map(|gc| gc.sync_interval_minutes)
                 .unwrap_or(15);
             Duration::from_secs(minutes as u64 * 60)
@@ -111,7 +115,10 @@ impl SimplifiedDaemonCore {
     /// Emit an insight updated signal
     async fn emit_insight_signal(&self, insight_id: i64, emoji: &str, preview: &str) {
         if let Some(ref emitter) = *self.signal_emitter.read().await {
-            if let Err(e) = emitter.emit_insight_updated(insight_id, emoji, preview).await {
+            if let Err(e) = emitter
+                .emit_insight_updated(insight_id, emoji, preview)
+                .await
+            {
                 warn!("Failed to emit InsightUpdated signal: {}", e);
             }
         } else {
@@ -221,7 +228,10 @@ impl SimplifiedDaemonCore {
         {
             let last_sync = self.last_calendar_sync.read();
             if let Some(last) = *last_sync {
-                if Utc::now() - last < chrono::Duration::from_std(self.calendar_sync_interval).unwrap_or(chrono::Duration::minutes(15)) {
+                if Utc::now() - last
+                    < chrono::Duration::from_std(self.calendar_sync_interval)
+                        .unwrap_or(chrono::Duration::minutes(15))
+                {
                     return;
                 }
             }
@@ -253,31 +263,47 @@ impl SimplifiedDaemonCore {
                     ) {
                         Ok(id) => id,
                         Err(e) => {
-                            warn!("Failed to create/update calendar {}: {}", google_calendar_id, e);
+                            warn!(
+                                "Failed to create/update calendar {}: {}",
+                                google_calendar_id, e
+                            );
                             continue;
                         }
                     };
 
                     // Delete old events for this calendar then bulk-insert fresh ones
                     if let Err(e) = self.database.delete_events_for_calendar(db_calendar_id) {
-                        warn!("Failed to delete old events for calendar {}: {}", google_calendar_id, e);
+                        warn!(
+                            "Failed to delete old events for calendar {}: {}",
+                            google_calendar_id, e
+                        );
                         continue;
                     }
 
                     // Set the calendar_id on each event before inserting
-                    let events_with_cal_id: Vec<_> = events.iter().map(|e| {
-                        let mut ev = e.clone();
-                        ev.calendar_id = db_calendar_id;
-                        ev
-                    }).collect();
+                    let events_with_cal_id: Vec<_> = events
+                        .iter()
+                        .map(|e| {
+                            let mut ev = e.clone();
+                            ev.calendar_id = db_calendar_id;
+                            ev
+                        })
+                        .collect();
 
                     match self.database.create_events_bulk(&events_with_cal_id) {
                         Ok(ids) => {
                             total_events += ids.len();
-                            debug!("Synced {} events for calendar {}", ids.len(), google_calendar_id);
+                            debug!(
+                                "Synced {} events for calendar {}",
+                                ids.len(),
+                                google_calendar_id
+                            );
                         }
                         Err(e) => {
-                            warn!("Failed to insert events for calendar {}: {}", google_calendar_id, e);
+                            warn!(
+                                "Failed to insert events for calendar {}: {}",
+                                google_calendar_id, e
+                            );
                         }
                     }
                 }
@@ -320,14 +346,18 @@ impl SimplifiedDaemonCore {
         let current_context = self.collect_current_context().await?;
 
         // Determine trigger: context change or heartbeat
-        let (is_significant, changes) = self.significance_engine.analyze_context(current_context.clone());
+        let (is_significant, changes) = self
+            .significance_engine
+            .analyze_context(current_context.clone());
 
         let trigger = if is_significant {
             info!("Significant changes detected: {:?}", changes);
             Some(InsightTrigger::ContextChange(changes))
         } else if let Some(phase) = self.should_fire_heartbeat() {
             // Check if we already fired a heartbeat this phase by looking at recent insights
-            let dominated_by_recent = self.database.get_recent_insights(1)
+            let dominated_by_recent = self
+                .database
+                .get_recent_insights(1)
                 .unwrap_or_default()
                 .first()
                 .map(|i| {
@@ -355,7 +385,11 @@ impl SimplifiedDaemonCore {
             match self.analyze_with_ai(&current_context, &trigger).await {
                 Ok(insight) => {
                     // Store the insight
-                    match self.database.store_insight(&insight.emoji, &insight.text, Some(&insight.context_hash)) {
+                    match self.database.store_insight(
+                        &insight.emoji,
+                        &insight.text,
+                        Some(&insight.context_hash),
+                    ) {
                         Ok(insight_id) => {
                             info!("Stored new insight with ID: {}", insight_id);
 
@@ -373,7 +407,8 @@ impl SimplifiedDaemonCore {
                             }
 
                             // Emit D-Bus signal to notify frontends of new insight
-                            self.emit_insight_signal(insight_id, &insight.emoji, &insight.text).await;
+                            self.emit_insight_signal(insight_id, &insight.emoji, &insight.text)
+                                .await;
                         }
                         Err(e) => {
                             error!("Failed to store insight: {}", e);
@@ -397,20 +432,30 @@ impl SimplifiedDaemonCore {
         let end_time = now + chrono::Duration::hours(24);
 
         // Get calendar events for next 24 hours from database
-        let calendar_events: Vec<_> = self.database.get_events_in_range(now, end_time)?
+        let calendar_events: Vec<_> = self
+            .database
+            .get_events_in_range(now, end_time)?
             .into_iter()
             .map(|event| crate::significance_engine::CalendarEventSummary {
                 id: event.source_id,
                 title: event.title.unwrap_or_default(),
                 start_time: DateTime::from_timestamp(event.start_time, 0).unwrap_or_default(),
-                end_time: event.end_time.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
+                end_time: event
+                    .end_time
+                    .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                 location: event.location,
                 is_all_day: event.is_all_day.unwrap_or(false),
             })
             .collect();
 
         // Collect additional context from all enabled context sources
-        let context_data = match self.context_manager.read().await.fetch_all_context(now, end_time).await {
+        let context_data = match self
+            .context_manager
+            .read()
+            .await
+            .fetch_all_context(now, end_time)
+            .await
+        {
             Ok(data) => data,
             Err(e) => {
                 warn!("Failed to fetch context from sources: {}", e);
@@ -485,16 +530,28 @@ impl SimplifiedDaemonCore {
     }
 
     /// Call AI service for analysis, with automatic retry on transient failures
-    async fn analyze_with_ai(&self, context: &ContextSnapshotSummary, trigger: &InsightTrigger) -> JasperResult<AiInsight> {
+    async fn analyze_with_ai(
+        &self,
+        context: &ContextSnapshotSummary,
+        trigger: &InsightTrigger,
+    ) -> JasperResult<AiInsight> {
         debug!("Calling AI service for context analysis");
 
         // Build the request body once so retries reuse it
         let request_body = self.build_anthropic_request(context, trigger)?;
 
-        match self.api_manager.execute_with_retry(|| {
-            let body = request_body.clone();
-            async move { self.send_anthropic_request(&body).await.map_err(|e| anyhow::anyhow!("{}", e)) }
-        }).await {
+        match self
+            .api_manager
+            .execute_with_retry(|| {
+                let body = request_body.clone();
+                async move {
+                    self.send_anthropic_request(&body)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{}", e))
+                }
+            })
+            .await
+        {
             Ok((insight, tokens_used)) => {
                 self.api_manager.record_api_call(tokens_used);
                 Ok(insight)
@@ -511,7 +568,9 @@ impl SimplifiedDaemonCore {
                         context_hash: context.context_hash.clone(),
                     })
                 } else {
-                    Err(crate::errors::JasperError::Internal { message: format!("AI analysis failed: {}", e) })
+                    Err(crate::errors::JasperError::Internal {
+                        message: format!("AI analysis failed: {}", e),
+                    })
                 }
             }
         }
@@ -571,7 +630,10 @@ impl SimplifiedDaemonCore {
     }
 
     /// Format a relative deadline for tasks (e.g., "due in 2 days", "OVERDUE by 3 days")
-    fn format_relative_deadline(now: &DateTime<chrono::FixedOffset>, due: &DateTime<Utc>) -> String {
+    fn format_relative_deadline(
+        now: &DateTime<chrono::FixedOffset>,
+        due: &DateTime<Utc>,
+    ) -> String {
         let due_local = due.with_timezone(&now.timezone());
         let diff = due_local.signed_duration_since(*now);
         let hours = diff.num_hours();
@@ -598,7 +660,11 @@ impl SimplifiedDaemonCore {
     }
 
     /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
-    fn build_anthropic_request(&self, context: &ContextSnapshotSummary, trigger: &InsightTrigger) -> JasperResult<serde_json::Value> {
+    fn build_anthropic_request(
+        &self,
+        context: &ContextSnapshotSummary,
+        trigger: &InsightTrigger,
+    ) -> JasperResult<serde_json::Value> {
         let (time_phase, local_now) = self.get_time_of_day_phase();
 
         // --- Build the system message with personality and guidance ---
@@ -608,20 +674,27 @@ impl SimplifiedDaemonCore {
             (p.clone(), tz.to_string())
         };
 
-        let persona_desc = personality.persona_reference
+        let persona_desc = personality
+            .persona_reference
             .as_deref()
             .map(|r| format!(" ({})", r))
             .unwrap_or_default();
 
         // Get recent insights for deduplication
-        let recent_insights = self.database.get_recent_insights(5)
-            .unwrap_or_default();
+        let recent_insights = self.database.get_recent_insights(5).unwrap_or_default();
         let recent_insights_text = if recent_insights.is_empty() {
             "None yet — this is your first insight of the session.".to_string()
         } else {
-            recent_insights.iter()
-                .map(|i| format!("- {} {} ({})", i.emoji, i.insight,
-                    Self::format_relative_time(&local_now, &i.created_at)))
+            recent_insights
+                .iter()
+                .map(|i| {
+                    format!(
+                        "- {} {} ({})",
+                        i.emoji,
+                        i.insight,
+                        Self::format_relative_time(&local_now, &i.created_at)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -662,24 +735,48 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         let trigger_text = match trigger {
             InsightTrigger::Heartbeat(phase) => format!("Trigger: Regular {} check-in.", phase),
             InsightTrigger::ContextChange(changes) => {
-                let change_descriptions: Vec<String> = changes.iter().map(|c| match c {
-                    SignificantChange::NewCalendarEvent(title) => format!("New event added: \"{}\"", title),
-                    SignificantChange::CancelledCalendarEvent(title) => format!("Event cancelled: \"{}\"", title),
-                    SignificantChange::EventTimeChanged { event_id, time_diff_hours } =>
-                        format!("Event {} moved by {:.1} hours", event_id, time_diff_hours),
-                    SignificantChange::EventLocationChanged { event_id } =>
-                        format!("Event {} location changed", event_id),
-                    SignificantChange::WeatherConditionChanged { from, to } =>
-                        format!("Weather changed: {} → {}", from, to),
-                    SignificantChange::WeatherTemperatureChanged { diff } =>
-                        format!("Temperature shifted by {}°F", diff),
-                    SignificantChange::NewTask(title) => format!("New task: \"{}\"", title),
-                    SignificantChange::TaskCompleted(title) => format!("Task completed: \"{}\"", title),
-                    SignificantChange::TaskDueChanged { task_id, time_diff_hours } =>
-                        format!("Task {} due date moved by {:.1} hours", task_id, time_diff_hours),
-                    SignificantChange::InitialContext => "Initial startup — first look at the day.".to_string(),
-                }).collect();
-                format!("Trigger: Context changed — {}", change_descriptions.join("; "))
+                let change_descriptions: Vec<String> = changes
+                    .iter()
+                    .map(|c| match c {
+                        SignificantChange::NewCalendarEvent(title) => {
+                            format!("New event added: \"{}\"", title)
+                        }
+                        SignificantChange::CancelledCalendarEvent(title) => {
+                            format!("Event cancelled: \"{}\"", title)
+                        }
+                        SignificantChange::EventTimeChanged {
+                            event_id,
+                            time_diff_hours,
+                        } => format!("Event {} moved by {:.1} hours", event_id, time_diff_hours),
+                        SignificantChange::EventLocationChanged { event_id } => {
+                            format!("Event {} location changed", event_id)
+                        }
+                        SignificantChange::WeatherConditionChanged { from, to } => {
+                            format!("Weather changed: {} → {}", from, to)
+                        }
+                        SignificantChange::WeatherTemperatureChanged { diff } => {
+                            format!("Temperature shifted by {}°F", diff)
+                        }
+                        SignificantChange::NewTask(title) => format!("New task: \"{}\"", title),
+                        SignificantChange::TaskCompleted(title) => {
+                            format!("Task completed: \"{}\"", title)
+                        }
+                        SignificantChange::TaskDueChanged {
+                            task_id,
+                            time_diff_hours,
+                        } => format!(
+                            "Task {} due date moved by {:.1} hours",
+                            task_id, time_diff_hours
+                        ),
+                        SignificantChange::InitialContext => {
+                            "Initial startup — first look at the day.".to_string()
+                        }
+                    })
+                    .collect();
+                format!(
+                    "Trigger: Context changed — {}",
+                    change_descriptions.join("; ")
+                )
             }
         };
         context_parts.push(trigger_text);
@@ -708,7 +805,9 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                 } else {
                     Self::format_relative_time(&local_now, &event.start_time)
                 };
-                let location = event.location.as_ref()
+                let location = event
+                    .location
+                    .as_ref()
                     .map(|l| format!(", at {}", l))
                     .unwrap_or_default();
                 cal_section.push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
@@ -720,8 +819,12 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         if !context.tasks.is_empty() {
             let mut task_section = String::from("\nTasks:");
             for task in &context.tasks {
-                if task.completed { continue; }
-                let deadline = task.due.as_ref()
+                if task.completed {
+                    continue;
+                }
+                let deadline = task
+                    .due
+                    .as_ref()
                     .map(|d| format!(" ({})", Self::format_relative_deadline(&local_now, d)))
                     .unwrap_or_else(|| " (no due date)".to_string());
                 task_section.push_str(&format!("\n- {}{}", task.title, deadline));
@@ -736,39 +839,61 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                 let today = &weather_ctx.forecast[0];
                 weather_section.push_str(&format!(
                     " (High: {:.0}°F, Low: {:.0}°F, {}% chance of precipitation)",
-                    today.temperature_high, today.temperature_low, (today.precipitation_chance * 100.0) as i32
+                    today.temperature_high,
+                    today.temperature_low,
+                    (today.precipitation_chance * 100.0) as i32
                 ));
             }
             if !weather_ctx.alerts.is_empty() {
-                weather_section.push_str(&format!("\nWeather alerts: {}", weather_ctx.alerts.join(", ")));
+                weather_section.push_str(&format!(
+                    "\nWeather alerts: {}",
+                    weather_ctx.alerts.join(", ")
+                ));
             }
             context_parts.push(weather_section);
         } else if let Some(weather) = &context.weather {
-            context_parts.push(format!("\nWeather: {} ({}°F)", weather.condition, weather.temperature));
+            context_parts.push(format!(
+                "\nWeather: {} ({}°F)",
+                weather.condition, weather.temperature
+            ));
         }
 
         // Notes context: projects, relationships, focus areas
         if let Some(notes) = &context.notes_context {
             // Active projects with deadlines
-            let active_projects: Vec<_> = notes.active_projects.iter()
-                .filter(|p| matches!(p.status, context_sources::ProjectStatus::Active | context_sources::ProjectStatus::Pending))
+            let active_projects: Vec<_> = notes
+                .active_projects
+                .iter()
+                .filter(|p| {
+                    matches!(
+                        p.status,
+                        context_sources::ProjectStatus::Active
+                            | context_sources::ProjectStatus::Pending
+                    )
+                })
                 .collect();
             if !active_projects.is_empty() {
                 let mut proj_section = String::from("\nActive Projects:");
                 for project in &active_projects {
-                    let deadline = project.due_date.as_ref()
+                    let deadline = project
+                        .due_date
+                        .as_ref()
                         .map(|d| format!(" ({})", Self::format_relative_deadline(&local_now, d)))
                         .unwrap_or_default();
                     let progress = if project.progress > 0.0 {
                         format!(", {:.0}% complete", project.progress * 100.0)
-                    } else { String::new() };
+                    } else {
+                        String::new()
+                    };
                     proj_section.push_str(&format!("\n- {}{}{}", project.name, deadline, progress));
                 }
                 context_parts.push(proj_section);
             }
 
             // Today's focus areas from daily notes
-            let focus_areas: Vec<_> = notes.daily_notes.iter()
+            let focus_areas: Vec<_> = notes
+                .daily_notes
+                .iter()
                 .flat_map(|n| n.focus_areas.iter())
                 .collect();
             if !focus_areas.is_empty() {
@@ -797,19 +922,24 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
     }
 
     /// Send the pre-built request body to the Anthropic API. Returns insight and tokens used.
-    async fn send_anthropic_request(&self, request_body: &serde_json::Value) -> JasperResult<(AiInsight, u64)> {
+    async fn send_anthropic_request(
+        &self,
+        request_body: &serde_json::Value,
+    ) -> JasperResult<(AiInsight, u64)> {
         let api_key = self.config.read().get_api_key()
             .ok_or_else(|| crate::errors::JasperError::Authentication { service: "anthropic".into(), message: "API key not configured. Set via config, SOPS secrets, or ANTHROPIC_API_KEY environment variable.".into() })?;
 
         // Strip our internal field before sending
         let mut body = request_body.clone();
-        let context_hash = body.get("_context_hash")
+        let context_hash = body
+            .get("_context_hash")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
         body.as_object_mut().map(|o| o.remove("_context_hash"));
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
@@ -817,18 +947,25 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             .json(&body)
             .send()
             .await
-            .map_err(|e| crate::errors::JasperError::Internal { message: format!("API request failed: {}", e) })?;
+            .map_err(|e| crate::errors::JasperError::Internal {
+                message: format!("API request failed: {}", e),
+            })?;
 
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             return Err(crate::errors::JasperError::Internal {
-                message: format!("API call failed with status {}: {}", status, error_text)
+                message: format!("API call failed with status {}: {}", status, error_text),
             });
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| crate::errors::JasperError::Internal { message: format!("Failed to parse response: {}", e) })?;
+        let response_json: serde_json::Value =
+            response
+                .json()
+                .await
+                .map_err(|e| crate::errors::JasperError::Internal {
+                    message: format!("Failed to parse response: {}", e),
+                })?;
 
         let content = response_json
             .get("content")
@@ -836,7 +973,9 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             .and_then(|arr| arr.first())
             .and_then(|item| item.get("text"))
             .and_then(|text| text.as_str())
-            .ok_or_else(|| crate::errors::JasperError::Internal { message: "Invalid API response format".to_string() })?;
+            .ok_or_else(|| crate::errors::JasperError::Internal {
+                message: "Invalid API response format".to_string(),
+            })?;
 
         let tokens_used = response_json
             .get("usage")
@@ -849,13 +988,16 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
 
         let (emoji, insight) = self.parse_ai_response(content);
 
-        Ok((AiInsight {
-            emoji,
-            text: insight,
-            context_hash,
-        }, tokens_used))
+        Ok((
+            AiInsight {
+                emoji,
+                text: insight,
+                context_hash,
+            },
+            tokens_used,
+        ))
     }
-    
+
     /// Parse AI response to extract emoji and insight.
     /// Supports both "Emoji:/Insight:" format and freeform "emoji text" format.
     fn parse_ai_response(&self, content: &str) -> (String, String) {
@@ -868,10 +1010,14 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         for line in &lines {
             if line.starts_with("Emoji:") {
                 let e = line.replace("Emoji:", "").trim().to_string();
-                if !e.is_empty() { emoji = Some(e); }
+                if !e.is_empty() {
+                    emoji = Some(e);
+                }
             } else if line.starts_with("Insight:") {
                 let i = line.replace("Insight:", "").trim().to_string();
-                if !i.is_empty() { insight = Some(i); }
+                if !i.is_empty() {
+                    insight = Some(i);
+                }
             }
         }
 
@@ -910,7 +1056,7 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                 } else {
                     content.to_string()
                 }
-            })
+            }),
         )
     }
 
@@ -987,10 +1133,10 @@ impl SimplifiedDaemonCore {
     pub async fn get_status(&self) -> JasperResult<DaemonStatus> {
         let is_running = *self.is_running.read();
         let active_frontends = self.database.get_active_frontends()?.len();
-        
+
         // Get insights count from database
         let insights_count = 0; // TODO: Add method to count insights
-        
+
         Ok(DaemonStatus {
             is_running,
             active_frontends,

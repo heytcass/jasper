@@ -51,13 +51,26 @@ pub struct TaskSummary {
 pub enum SignificantChange {
     NewCalendarEvent(String),
     CancelledCalendarEvent(String),
-    EventTimeChanged { event_id: String, time_diff_hours: f64 },
-    EventLocationChanged { event_id: String },
-    WeatherConditionChanged { from: String, to: String },
-    WeatherTemperatureChanged { diff: i32 },
+    EventTimeChanged {
+        event_id: String,
+        time_diff_hours: f64,
+    },
+    EventLocationChanged {
+        event_id: String,
+    },
+    WeatherConditionChanged {
+        from: String,
+        to: String,
+    },
+    WeatherTemperatureChanged {
+        diff: i32,
+    },
     NewTask(String),
     TaskCompleted(String),
-    TaskDueChanged { task_id: String, time_diff_hours: f64 },
+    TaskDueChanged {
+        task_id: String,
+        time_diff_hours: f64,
+    },
     InitialContext,
 }
 
@@ -94,8 +107,10 @@ impl SignificanceEngine {
             if let Some(last_call) = *last_ai_call {
                 let time_since_last = Utc::now() - last_call;
                 if time_since_last < self.min_time_between_calls {
-                    debug!("Skipping analysis - too soon since last AI call ({} seconds ago)",
-                        time_since_last.num_seconds());
+                    debug!(
+                        "Skipping analysis - too soon since last AI call ({} seconds ago)",
+                        time_since_last.num_seconds()
+                    );
                     return (false, vec![]);
                 }
             }
@@ -104,10 +119,14 @@ impl SignificanceEngine {
         let mut changes = Vec::new();
 
         // Check calendar changes
-        changes.extend(self.check_calendar_changes(&last.calendar_events, &new_snapshot.calendar_events));
+        changes.extend(
+            self.check_calendar_changes(&last.calendar_events, &new_snapshot.calendar_events),
+        );
 
         // Check weather changes
-        if let (Some(ref old_weather), Some(ref new_weather)) = (&last.weather, &new_snapshot.weather) {
+        if let (Some(ref old_weather), Some(ref new_weather)) =
+            (&last.weather, &new_snapshot.weather)
+        {
             changes.extend(self.check_weather_changes(old_weather, new_weather));
         }
 
@@ -130,16 +149,18 @@ impl SignificanceEngine {
         (is_significant, changes)
     }
 
-    fn check_calendar_changes(&self, old: &[CalendarEventSummary], new: &[CalendarEventSummary]) -> Vec<SignificantChange> {
+    fn check_calendar_changes(
+        &self,
+        old: &[CalendarEventSummary],
+        new: &[CalendarEventSummary],
+    ) -> Vec<SignificantChange> {
         let mut changes = Vec::new();
-        
+
         // Create maps for easier comparison
-        let old_map: HashMap<&str, &CalendarEventSummary> = old.iter()
-            .map(|e| (e.id.as_str(), e))
-            .collect();
-        let new_map: HashMap<&str, &CalendarEventSummary> = new.iter()
-            .map(|e| (e.id.as_str(), e))
-            .collect();
+        let old_map: HashMap<&str, &CalendarEventSummary> =
+            old.iter().map(|e| (e.id.as_str(), e)).collect();
+        let new_map: HashMap<&str, &CalendarEventSummary> =
+            new.iter().map(|e| (e.id.as_str(), e)).collect();
 
         // Check for new events
         for (id, event) in &new_map {
@@ -151,7 +172,9 @@ impl SignificanceEngine {
         // Check for cancelled events
         for (id, event) in &old_map {
             if !new_map.contains_key(id) {
-                changes.push(SignificantChange::CancelledCalendarEvent(event.title.clone()));
+                changes.push(SignificantChange::CancelledCalendarEvent(
+                    event.title.clone(),
+                ));
             }
         }
 
@@ -159,8 +182,10 @@ impl SignificanceEngine {
         for (id, new_event) in &new_map {
             if let Some(old_event) = old_map.get(id) {
                 // Check time changes
-                let time_diff = (new_event.start_time - old_event.start_time).num_minutes() as f64 / 60.0;
-                if time_diff.abs() > 1.0 { // More than 1 hour difference
+                let time_diff =
+                    (new_event.start_time - old_event.start_time).num_minutes() as f64 / 60.0;
+                if time_diff.abs() > 1.0 {
+                    // More than 1 hour difference
                     changes.push(SignificantChange::EventTimeChanged {
                         event_id: (*id).to_string(),
                         time_diff_hours: time_diff,
@@ -179,7 +204,11 @@ impl SignificanceEngine {
         changes
     }
 
-    fn check_weather_changes(&self, old: &WeatherSummary, new: &WeatherSummary) -> Vec<SignificantChange> {
+    fn check_weather_changes(
+        &self,
+        old: &WeatherSummary,
+        new: &WeatherSummary,
+    ) -> Vec<SignificantChange> {
         let mut changes = Vec::new();
 
         // Check condition changes (sunny to rainy, etc)
@@ -201,15 +230,15 @@ impl SignificanceEngine {
         changes
     }
 
-    fn check_task_changes(&self, old: &[TaskSummary], new: &[TaskSummary]) -> Vec<SignificantChange> {
+    fn check_task_changes(
+        &self,
+        old: &[TaskSummary],
+        new: &[TaskSummary],
+    ) -> Vec<SignificantChange> {
         let mut changes = Vec::new();
-        
-        let old_map: HashMap<&str, &TaskSummary> = old.iter()
-            .map(|t| (t.id.as_str(), t))
-            .collect();
-        let new_map: HashMap<&str, &TaskSummary> = new.iter()
-            .map(|t| (t.id.as_str(), t))
-            .collect();
+
+        let old_map: HashMap<&str, &TaskSummary> = old.iter().map(|t| (t.id.as_str(), t)).collect();
+        let new_map: HashMap<&str, &TaskSummary> = new.iter().map(|t| (t.id.as_str(), t)).collect();
 
         // Check for new tasks
         for (id, task) in &new_map {
@@ -279,7 +308,7 @@ mod tests {
     #[test]
     fn test_new_calendar_event_is_significant() {
         let engine = SignificanceEngine::new();
-        
+
         let snapshot1 = ContextSnapshot {
             calendar_events: vec![],
             weather: None,
@@ -310,16 +339,18 @@ mod tests {
 
         // Bypass time restriction for testing
         *engine.last_ai_call.lock() = None;
-        
+
         let (is_significant, changes) = engine.analyze_context(snapshot2);
         assert!(is_significant);
-        assert!(changes.iter().any(|c| matches!(c, SignificantChange::NewCalendarEvent(_))));
+        assert!(changes
+            .iter()
+            .any(|c| matches!(c, SignificantChange::NewCalendarEvent(_))));
     }
 
     #[test]
     fn test_small_time_change_not_significant() {
         let engine = SignificanceEngine::new();
-        
+
         let event = CalendarEventSummary {
             id: "1".to_string(),
             title: "Meeting".to_string(),
@@ -355,7 +386,7 @@ mod tests {
 
         // Bypass time restriction for testing
         *engine.last_ai_call.lock() = None;
-        
+
         let (is_significant, changes) = engine.analyze_context(snapshot2);
         assert!(!is_significant);
         assert!(changes.is_empty());

@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
-use tracing::{info, error, debug};
-use zbus::{Connection, proxy};
+use tracing::{debug, error, info};
+use zbus::{proxy, Connection};
 
 /// Waybar adapter that connects to the simplified Jasper daemon via D-Bus
 /// This replaces all the complex waybar formatting code in the old architecture
@@ -15,7 +15,7 @@ trait JasperDaemon {
     async fn register_frontend(&self, frontend_id: String, pid: i32) -> zbus::Result<bool>;
     async fn unregister_frontend(&self, frontend_id: String) -> zbus::Result<bool>;
     async fn get_status(&self) -> zbus::Result<(bool, u32, i64)>;
-    
+
     // TODO: Add signal subscription for real-time updates
 }
 
@@ -25,23 +25,23 @@ pub struct WaybarAdapter {
 
 impl WaybarAdapter {
     pub async fn new() -> Self {
-        Self {
-            proxy: None,
-        }
+        Self { proxy: None }
     }
 
     /// Connect to the Jasper daemon
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let connection = Connection::session().await?;
         let proxy = JasperDaemonProxy::new(&connection).await?;
-        
+
         // Register as waybar frontend
-        let success = proxy.register_frontend("waybar".to_string(), std::process::id() as i32).await?;
+        let success = proxy
+            .register_frontend("waybar".to_string(), std::process::id() as i32)
+            .await?;
         if !success {
             error!("Failed to register with Jasper daemon");
             return Err("Registration failed".into());
         }
-        
+
         self.proxy = Some(proxy);
         info!("Connected to Jasper daemon");
         Ok(())
@@ -162,7 +162,7 @@ pub async fn run_waybar_mode() -> Result<(), Box<dyn std::error::Error>> {
 /// Simple status check for waybar
 pub async fn waybar_status() -> Result<(), Box<dyn std::error::Error>> {
     let mut adapter = WaybarAdapter::new().await;
-    
+
     match adapter.connect().await {
         Ok(()) => {
             match adapter.get_status().await {
@@ -198,18 +198,19 @@ mod tests {
     #[test]
     fn test_output_formatting() {
         let adapter = WaybarAdapter { proxy: None };
-        
+
         // Test insight formatting
         let output = adapter.format_insight_output("🎯", "Short insight");
         assert!(output["text"].as_str().unwrap().contains("🎯"));
         assert!(output["text"].as_str().unwrap().contains("Short insight"));
-        
+
         // Test long insight truncation
-        let long_insight = "This is a very long insight that should be truncated for waybar display";
+        let long_insight =
+            "This is a very long insight that should be truncated for waybar display";
         let output = adapter.format_insight_output("📅", long_insight);
         assert!(output["text"].as_str().unwrap().chars().count() <= 52); // emoji + space + 47 chars + "..."
         assert!(output["tooltip"].as_str().unwrap() == long_insight);
-        
+
         // Test error output
         let output = adapter.error_output("Test error");
         assert!(output["text"].as_str().unwrap().contains("⚠️"));
