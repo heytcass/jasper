@@ -29,6 +29,10 @@ pub struct CalendarEventSummary {
     pub end_time: Option<DateTime<Utc>>,
     pub location: Option<String>,
     pub is_all_day: bool,
+    /// Human-readable calendar name (e.g. "Christen" instead of an email address)
+    pub calendar_name: Option<String>,
+    /// True if access_role == "owner" — this is the user's own calendar
+    pub is_own_calendar: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
@@ -330,6 +334,8 @@ mod tests {
                 end_time: None,
                 location: None,
                 is_all_day: false,
+                calendar_name: None,
+                is_own_calendar: true,
             }],
             weather: None,
             tasks: vec![],
@@ -360,6 +366,8 @@ mod tests {
             end_time: None,
             location: None,
             is_all_day: false,
+            calendar_name: None,
+            is_own_calendar: true,
         };
 
         let snapshot1 = ContextSnapshot {

@@ -88,6 +88,18 @@ struct GoogleEventAttendee {
     email: Option<String>,
     #[serde(rename = "displayName")]
     display_name: Option<String>,
+    /// Whether this attendee is the authenticated user (Google API `self` field)
+    #[serde(rename = "self")]
+    is_self: Option<bool>,
+}
+
+/// Metadata about a calendar from the calendarList endpoint
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct CalendarMetadata {
+    pub display_name: String,
+    pub access_role: String,
+    pub is_primary: bool,
 }
 
 pub struct GoogleCalendarService {
@@ -284,6 +296,30 @@ impl GoogleCalendarService {
         });
 
         Ok(entries)
+    }
+
+    /// Fetch metadata for all calendars the user has access to.
+    /// Returns a map keyed by calendar ID (including "primary" alias) → CalendarMetadata.
+    pub async fn fetch_calendar_metadata(
+        &self,
+    ) -> Result<std::collections::HashMap<String, CalendarMetadata>> {
+        let entries = self.fetch_calendar_list().await?;
+        let mut map = std::collections::HashMap::new();
+
+        for entry in &entries {
+            let meta = CalendarMetadata {
+                display_name: entry.summary.clone().unwrap_or_else(|| entry.id.clone()),
+                access_role: entry.access_role.clone().unwrap_or_default(),
+                is_primary: entry.primary.unwrap_or(false),
+            };
+            map.insert(entry.id.clone(), meta.clone());
+            // Also map "primary" alias so callers using that ID get the metadata
+            if entry.primary.unwrap_or(false) {
+                map.insert("primary".to_string(), meta);
+            }
+        }
+
+        Ok(map)
     }
 
     /// Get a valid access token, refreshing if necessary

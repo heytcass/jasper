@@ -11,6 +11,7 @@ use crate::significance_engine::{
 
 use chrono::{DateTime, Timelike, Utc};
 use parking_lot::RwLock;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
@@ -249,17 +250,38 @@ impl SimplifiedDaemonCore {
         let planning_horizon = self.config.read().get_planning_horizon();
         let end_time = now + planning_horizon;
 
+        // Fetch calendar metadata (display names, access roles) once per sync cycle
+        let calendar_metadata = match calendar_service.fetch_calendar_metadata().await {
+            Ok(meta) => {
+                debug!("Fetched metadata for {} calendars", meta.len());
+                meta
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch calendar metadata, falling back to IDs: {}",
+                    e
+                );
+                std::collections::HashMap::new()
+            }
+        };
+
         match calendar_service.fetch_events(now, end_time).await {
             Ok(events_by_calendar) => {
                 let mut total_events = 0usize;
 
                 for (google_calendar_id, events) in &events_by_calendar {
-                    // Ensure calendar exists in DB and get its DB id
-                    let calendar_name = google_calendar_id.clone();
+                    // Look up display name and access role from metadata
+                    let (calendar_name, access_role) =
+                        if let Some(meta) = calendar_metadata.get(google_calendar_id) {
+                            (meta.display_name.clone(), Some(meta.access_role.as_str()))
+                        } else {
+                            (google_calendar_id.clone(), None)
+                        };
                     let db_calendar_id = match self.database.create_or_update_calendar(
                         google_calendar_id,
                         &calendar_name,
                         Some("google_calendar"),
+                        access_role,
                     ) {
                         Ok(id) => id,
                         Err(e) => {
@@ -436,20 +458,25 @@ impl SimplifiedDaemonCore {
         // cause the significance engine to misinterpret them as cancelled).
         let lookback_start = now - chrono::Duration::hours(12);
 
-        // Get calendar events from lookback window through next 24 hours
+        // Get calendar events from lookback window through next 24 hours (with calendar context)
         let calendar_events: Vec<_> = self
             .database
-            .get_events_in_range(lookback_start, end_time)?
+            .get_events_in_range_with_calendar(lookback_start, end_time)?
             .into_iter()
-            .map(|event| crate::significance_engine::CalendarEventSummary {
-                id: event.source_id,
-                title: event.title.unwrap_or_default(),
-                start_time: DateTime::from_timestamp(event.start_time, 0).unwrap_or_default(),
-                end_time: event
-                    .end_time
-                    .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
-                location: event.location,
-                is_all_day: event.is_all_day.unwrap_or(false),
+            .map(|(event, calendar_name, access_role)| {
+                let is_own = access_role.as_deref() == Some("owner");
+                crate::significance_engine::CalendarEventSummary {
+                    id: event.source_id,
+                    title: event.title.unwrap_or_default(),
+                    start_time: DateTime::from_timestamp(event.start_time, 0).unwrap_or_default(),
+                    end_time: event
+                        .end_time
+                        .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
+                    location: event.location,
+                    is_all_day: event.is_all_day.unwrap_or(false),
+                    calendar_name: Some(calendar_name),
+                    is_own_calendar: is_own,
+                }
             })
             .collect();
 
@@ -721,7 +748,8 @@ Do NOT:\n\
 - Repeat something you've already surfaced recently (see recent insights below)\n\
 - Be robotic or generic — write like someone who knows {title} personally, with warmth\n\
 - Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\
-- NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\n\
+- NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\
+- NEVER assume {title} is involved in events from shared calendars — those are shown for awareness only. Never say \"you were briefed on\" or \"your call with\" for shared events. Frame as: \"Christen has a call at 3pm\" not \"you have a call at 3pm\"\n\n\
 Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
             persona = personality.assistant_persona,
@@ -801,23 +829,66 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             );
         }
 
-        // Calendar events with relative times
+        // Calendar events with relative times — partitioned by ownership
         if !context.calendar_events.is_empty() {
-            let mut cal_section = String::from("\nCalendar (next 24h):");
-            for event in &context.calendar_events {
-                let timing = if event.is_all_day {
-                    "all day".to_string()
-                } else {
-                    Self::format_relative_time(&local_now, &event.start_time)
-                };
-                let location = event
-                    .location
-                    .as_ref()
-                    .map(|l| format!(", at {}", l))
-                    .unwrap_or_default();
-                cal_section.push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
+            let (own_events, shared_events): (Vec<_>, Vec<_>) = context
+                .calendar_events
+                .iter()
+                .partition(|e| e.is_own_calendar);
+
+            // Own calendar events
+            if !own_events.is_empty() {
+                let mut cal_section = String::from("\nYour calendar (next 24h):");
+                for event in &own_events {
+                    let timing = if event.is_all_day {
+                        "all day".to_string()
+                    } else {
+                        Self::format_relative_time(&local_now, &event.start_time)
+                    };
+                    let location = event
+                        .location
+                        .as_ref()
+                        .map(|l| format!(", at {}", l))
+                        .unwrap_or_default();
+                    cal_section
+                        .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
+                }
+                context_parts.push(cal_section);
             }
-            context_parts.push(cal_section);
+
+            // Shared calendar events, grouped by calendar name
+            if !shared_events.is_empty() {
+                let mut by_calendar: BTreeMap<
+                    &str,
+                    Vec<&&crate::significance_engine::CalendarEventSummary>,
+                > = BTreeMap::new();
+                for event in &shared_events {
+                    let name = event.calendar_name.as_deref().unwrap_or("Shared");
+                    by_calendar.entry(name).or_default().push(event);
+                }
+
+                for (cal_name, events) in &by_calendar {
+                    let mut section = format!(
+                        "\nShared calendar — {} (awareness only, NOT {}'s events):",
+                        cal_name, personality.user_title,
+                    );
+                    for event in events {
+                        let timing = if event.is_all_day {
+                            "all day".to_string()
+                        } else {
+                            Self::format_relative_time(&local_now, &event.start_time)
+                        };
+                        let location = event
+                            .location
+                            .as_ref()
+                            .map(|l| format!(", at {}", l))
+                            .unwrap_or_default();
+                        section
+                            .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
+                    }
+                    context_parts.push(section);
+                }
+            }
         }
 
         // Tasks with relative deadlines

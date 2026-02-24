@@ -220,6 +220,10 @@ impl DatabaseInner {
         )
         .ok(); // Ignore error if column already exists
 
+        // Add access_role column to calendars (owner, reader, writer, freeBusyReader)
+        conn.execute("ALTER TABLE calendars ADD COLUMN access_role TEXT", [])
+            .ok(); // Ignore error if column already exists
+
         // Create indexes for events table to optimize time-based queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_start_time ON events(start_time)",
@@ -410,6 +414,7 @@ impl DatabaseInner {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_events_in_range(
         &self,
         start: DateTime<Utc>,
@@ -420,6 +425,7 @@ impl DatabaseInner {
     }
 
     /// Get events in range with pagination support for large datasets
+    #[allow(dead_code)]
     pub fn get_events_in_range_paginated(
         &self,
         start: DateTime<Utc>,
@@ -469,6 +475,52 @@ impl DatabaseInner {
                 .collect::<Result<Vec<_>, _>>()?;
 
             Ok(events)
+        })
+    }
+
+    /// Get events in range with calendar metadata (name + access_role).
+    /// Returns (Event, calendar_name, Option<access_role>) tuples.
+    pub fn get_events_in_range_with_calendar(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> JasperResult<Vec<(Event, String, Option<String>)>> {
+        self.with_connection_retry(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT e.id, e.source_id, e.calendar_id, e.title, e.description, e.start_time, e.end_time,
+                        e.location, e.event_type, e.participants, e.raw_data_json, e.is_all_day,
+                        c.calendar_name, c.access_role
+                 FROM events e
+                 LEFT JOIN calendars c ON e.calendar_id = c.id
+                 WHERE e.start_time >= ? AND e.start_time <= ?
+                 ORDER BY e.start_time
+                 LIMIT 10000",
+            )?;
+
+            let rows = stmt
+                .query_map(params![start.timestamp(), end.timestamp()], |row| {
+                    let event = Event {
+                        id: row.get(0)?,
+                        source_id: row.get(1)?,
+                        calendar_id: row.get(2)?,
+                        title: row.get(3)?,
+                        description: row.get(4)?,
+                        start_time: row.get(5)?,
+                        end_time: row.get(6)?,
+                        location: row.get(7)?,
+                        event_type: row.get(8)?,
+                        participants: row.get(9)?,
+                        raw_data_json: row.get(10)?,
+                        is_all_day: row.get::<_, Option<i32>>(11)?.map(|v| v != 0),
+                    };
+                    let calendar_name: String = row.get::<_, Option<String>>(12)?
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let access_role: Option<String> = row.get(13)?;
+                    Ok((event, calendar_name, access_role))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(rows)
         })
     }
 
@@ -547,6 +599,7 @@ impl DatabaseInner {
         calendar_id: &str,
         calendar_name: &str,
         calendar_type: Option<&str>,
+        access_role: Option<&str>,
     ) -> JasperResult<i64> {
         let conn = self.connection.lock();
 
@@ -565,16 +618,16 @@ impl DatabaseInner {
         if let Some(id) = existing_id {
             // Update existing calendar
             conn.execute(
-                "UPDATE calendars SET calendar_name = ?, calendar_type = ? WHERE id = ?",
-                params![calendar_name, calendar_type, id],
+                "UPDATE calendars SET calendar_name = ?, calendar_type = ?, access_role = ? WHERE id = ?",
+                params![calendar_name, calendar_type, access_role, id],
             )?;
             Ok(id)
         } else {
             // Create new calendar
             conn.execute(
-                "INSERT INTO calendars (account_id, calendar_id, calendar_name, calendar_type, color)
-                 VALUES (?, ?, ?, ?, ?)",
-                params![account_id, calendar_id, calendar_name, calendar_type, Self::infer_calendar_color(calendar_id)]
+                "INSERT INTO calendars (account_id, calendar_id, calendar_name, calendar_type, color, access_role)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![account_id, calendar_id, calendar_name, calendar_type, Self::infer_calendar_color(calendar_id), access_role]
             )?;
             Ok(conn.last_insert_rowid())
         }
