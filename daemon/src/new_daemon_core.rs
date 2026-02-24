@@ -431,10 +431,15 @@ impl SimplifiedDaemonCore {
         let now = Utc::now();
         let end_time = now + chrono::Duration::hours(24);
 
-        // Get calendar events for next 24 hours from database
+        // Look back 12 hours so in-progress events remain visible in the context
+        // rather than dropping out the instant their start_time passes (which would
+        // cause the significance engine to misinterpret them as cancelled).
+        let lookback_start = now - chrono::Duration::hours(12);
+
+        // Get calendar events from lookback window through next 24 hours
         let calendar_events: Vec<_> = self
             .database
-            .get_events_in_range(now, end_time)?
+            .get_events_in_range(lookback_start, end_time)?
             .into_iter()
             .map(|event| crate::significance_engine::CalendarEventSummary {
                 id: event.source_id,

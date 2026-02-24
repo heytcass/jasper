@@ -169,9 +169,11 @@ impl SignificanceEngine {
             }
         }
 
-        // Check for cancelled events
+        // Check for cancelled events (only flag future events — past events
+        // simply ended naturally and shouldn't be reported as cancellations)
+        let now = Utc::now();
         for (id, event) in &old_map {
-            if !new_map.contains_key(id) {
+            if !new_map.contains_key(id) && event.start_time > now {
                 changes.push(SignificantChange::CancelledCalendarEvent(
                     event.title.clone(),
                 ));
