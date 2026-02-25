@@ -750,7 +750,8 @@ Do NOT:\n\
 - Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\
 - NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\
 - NEVER assume {title} is involved in events from shared calendars — those are shown for awareness only. Never say \"you were briefed on\" or \"your call with\" for shared events. Frame as: \"Christen has a call at 3pm\" not \"you have a call at 3pm\"\n\n\
-Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\n\
+Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\
+Start your response with a single emoji that captures the mood or topic (e.g. ☕ for morning routines, ⏰ for time-sensitive items, 🌧️ for weather impacts, 📋 for tasks). Vary it — don't reuse the same emoji back-to-back.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
             persona = personality.assistant_persona,
             persona_ref = persona_desc,
