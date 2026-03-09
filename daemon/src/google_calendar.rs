@@ -125,18 +125,11 @@ impl GoogleCalendarService {
         }
     }
 
-    /// Check if we have valid authentication
+    /// Check if we have valid authentication (attempts token refresh if expired)
     pub async fn is_authenticated(&self) -> bool {
-        if let Ok(token) = self.load_stored_token().await {
-            if let Some(expires_at) = token.expires_at {
-                // Check if token is still valid (expires in the future)
-                Utc::now() < expires_at
-            } else {
-                // No expiry means it's likely a long-lived token
-                true
-            }
-        } else {
-            false
+        match self.get_valid_token().await {
+            Ok(_) => true,
+            Err(_) => false,
         }
     }
 

@@ -36,6 +36,8 @@ pub struct GeneralConfig {
     pub planning_horizon_days: u32,
     /// Timezone for displaying events
     pub timezone: String,
+    /// Path to personal context markdown file (default: <config_dir>/context.md)
+    pub personal_context_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +88,7 @@ impl Default for Config {
             general: GeneralConfig {
                 planning_horizon_days: 7,
                 timezone: "America/Detroit".to_string(),
+                personal_context_file: None,
             },
             ai: AiConfig {
                 model: "claude-sonnet-4-6".to_string(),
@@ -243,6 +246,12 @@ impl Config {
             .join("jasper-companion");
 
         Ok(data_dir)
+    }
+
+    /// Get the personal context file path (explicit config or default convention)
+    pub fn get_personal_context_path() -> Option<PathBuf> {
+        let config_dir = dirs::config_dir()?.join("jasper-companion");
+        Some(config_dir.join("context.md"))
     }
 
     /// Get enhanced personality configuration for prompt generation

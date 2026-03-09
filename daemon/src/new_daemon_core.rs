@@ -13,6 +13,7 @@ use chrono::{DateTime, Timelike, Utc};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
@@ -62,6 +63,12 @@ pub struct SimplifiedDaemonCore {
 
     // D-Bus signal emitter (initialized when D-Bus connection is ready)
     signal_emitter: Arc<tokio::sync::RwLock<Option<DbusSignalEmitter>>>,
+
+    // Track whether we've already emitted an auth warning (avoid spamming every sync cycle)
+    auth_warning_emitted: Arc<RwLock<bool>>,
+
+    // Cached personal context file: (file_mtime, contents)
+    personal_context_cache: Arc<RwLock<Option<(SystemTime, String)>>>,
 }
 
 impl SimplifiedDaemonCore {
@@ -95,6 +102,8 @@ impl SimplifiedDaemonCore {
             check_interval: Duration::from_secs(60), // Check every minute
             is_running: Arc::new(RwLock::new(false)),
             signal_emitter: Arc::new(tokio::sync::RwLock::new(None)),
+            auth_warning_emitted: Arc::new(RwLock::new(false)),
+            personal_context_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -238,10 +247,26 @@ impl SimplifiedDaemonCore {
             }
         }
 
-        // Check if authenticated
+        // Check if authenticated (this now attempts token refresh if expired)
         if !calendar_service.is_authenticated().await {
-            debug!("Google Calendar not authenticated, skipping sync");
+            warn!("Google Calendar not authenticated — token refresh failed or no credentials");
+
+            // Surface auth failure to user (once, not every sync cycle)
+            if !*self.auth_warning_emitted.read() {
+                *self.auth_warning_emitted.write() = true;
+                let emoji = "🔑";
+                let text = "Google Calendar authentication expired — run `jasper-companion-daemon auth-google` to re-authenticate.";
+                if let Ok(insight_id) = self.database.store_insight(emoji, text, None) {
+                    self.emit_insight_signal(insight_id, emoji, text).await;
+                    warn!("Auth warning insight emitted to frontends");
+                }
+            }
             return;
+        }
+
+        // Auth succeeded — clear warning flag if it was set
+        if *self.auth_warning_emitted.read() {
+            *self.auth_warning_emitted.write() = false;
         }
 
         info!("Starting Google Calendar sync");
@@ -608,6 +633,52 @@ impl SimplifiedDaemonCore {
         }
     }
 
+    /// Load personal context from the user's context file, with mtime-based caching
+    fn load_personal_context(&self) -> Option<String> {
+        // Resolve path: explicit config override, or default convention
+        let path = {
+            let cfg = self.config.read();
+            if let Some(ref explicit) = cfg.general.personal_context_file {
+                let expanded = if explicit.starts_with("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        home.join(&explicit[2..])
+                    } else {
+                        std::path::PathBuf::from(explicit)
+                    }
+                } else {
+                    std::path::PathBuf::from(explicit)
+                };
+                expanded
+            } else {
+                Config::get_personal_context_path()?
+            }
+        };
+
+        let metadata = std::fs::metadata(&path).ok()?;
+        let mtime = metadata.modified().ok()?;
+
+        // Check cache: return cached content if file hasn't changed
+        {
+            let cache = self.personal_context_cache.read();
+            if let Some((cached_mtime, ref content)) = *cache {
+                if cached_mtime == mtime {
+                    return Some(content.clone());
+                }
+            }
+        }
+
+        // File changed (or first read) — reload
+        match std::fs::read_to_string(&path) {
+            Ok(content) if !content.trim().is_empty() => {
+                let trimmed = content.trim().to_string();
+                *self.personal_context_cache.write() = Some((mtime, trimmed.clone()));
+                info!("Loaded personal context from {:?} ({} bytes)", path, trimmed.len());
+                Some(trimmed)
+            }
+            _ => None,
+        }
+    }
+
     /// Determine the current time-of-day phase for the user's timezone
     fn get_time_of_day_phase(&self) -> (&'static str, DateTime<chrono::FixedOffset>) {
         let tz = self.config.read().get_timezone();
@@ -761,6 +832,19 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             formality = personality.formality,
             recent_insights = recent_insights_text,
         );
+
+        // Append personal context if the user has a context.md file
+        let system_message = if let Some(personal_ctx) = self.load_personal_context() {
+            let title = &personality.user_title;
+            format!(
+                "{system_message}\n\n\
+                 Personal context about {title} (provided by them — use this to understand their life, \
+                 relationships, and routines when interpreting calendar events and generating insights):\n\
+                 {personal_ctx}"
+            )
+        } else {
+            system_message
+        };
 
         // --- Build the context (user message) with full data and relative times ---
         let mut context_parts: Vec<String> = Vec::new();
