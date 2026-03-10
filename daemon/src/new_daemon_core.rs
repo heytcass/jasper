@@ -816,6 +816,128 @@ impl SimplifiedDaemonCore {
         }
     }
 
+    /// Format an event label for schedule situation output (e.g. "Kieran: Soccer (5:30-7:00 PM, at Rec Center)")
+    fn format_situation_event_label(
+        event: &crate::significance_engine::CalendarEventSummary,
+        tz: &chrono::FixedOffset,
+    ) -> String {
+        let cal_prefix = if !event.is_primary_calendar {
+            event
+                .calendar_name
+                .as_deref()
+                .map(|n| format!("{}: ", n))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let start_local = event.start_time.with_timezone(tz);
+        let time_range = if let Some(end) = event.end_time {
+            let end_local = end.with_timezone(tz);
+            format!(
+                "{}-{}",
+                start_local.format("%-I:%M %p"),
+                end_local.format("%-I:%M %p")
+            )
+        } else {
+            format!("{}", start_local.format("%-I:%M %p"))
+        };
+
+        let location = event
+            .location
+            .as_deref()
+            .map(|l| format!(", at {}", l))
+            .unwrap_or_default();
+
+        format!("\"{}{}\" ({}{})", cal_prefix, event.title, time_range, location)
+    }
+
+    /// Detect cross-event schedule situations worth surfacing to the AI.
+    /// Finds time overlaps between owned calendars and tight timing on the user's primary calendar.
+    fn detect_schedule_situations(
+        events: &[crate::significance_engine::CalendarEventSummary],
+        now: &DateTime<chrono::FixedOffset>,
+    ) -> Vec<String> {
+        let mut situations = Vec::new();
+        let tz = now.timezone();
+        let now_utc = now.to_utc();
+
+        // Filter to future/in-progress, non-all-day events on owned calendars only
+        let relevant: Vec<&crate::significance_engine::CalendarEventSummary> = events
+            .iter()
+            .filter(|e| !e.is_all_day)
+            .filter(|e| e.is_own_calendar) // primary + owned non-primary
+            .filter(|e| {
+                // Keep events that haven't ended yet
+                e.end_time.map(|end| end > now_utc).unwrap_or(true)
+            })
+            .collect();
+
+        // Compare all pairs (N is small — typically <20 events in 24h window)
+        for i in 0..relevant.len() {
+            for j in (i + 1)..relevant.len() {
+                let a = relevant[i];
+                let b = relevant[j];
+
+                let a_end = match a.end_time {
+                    Some(end) => end,
+                    None => continue,
+                };
+                let b_end = match b.end_time {
+                    Some(end) => end,
+                    None => continue,
+                };
+
+                // Hard overlap: A starts before B ends AND B starts before A ends
+                let overlaps = a.start_time < b_end && b.start_time < a_end;
+
+                if overlaps {
+                    // Flag cross-calendar overlaps or same-person double-bookings
+                    let cross_calendar = a.calendar_name != b.calendar_name
+                        || a.is_primary_calendar
+                        || b.is_primary_calendar;
+
+                    if cross_calendar {
+                        let a_label = Self::format_situation_event_label(a, &tz);
+                        let b_label = Self::format_situation_event_label(b, &tz);
+                        situations.push(format!(
+                            "OVERLAP: {} and {} — both need someone there",
+                            a_label, b_label
+                        ));
+                    }
+                } else {
+                    // Check for tight timing: gap < 15 minutes between consecutive events
+                    let gap = if a_end <= b.start_time {
+                        (b.start_time - a_end).num_minutes()
+                    } else if b_end <= a.start_time {
+                        (a.start_time - b_end).num_minutes()
+                    } else {
+                        continue;
+                    };
+
+                    if gap >= 0 && gap <= 15 {
+                        // Only flag tight timing when the user's primary calendar is involved
+                        if a.is_primary_calendar || b.is_primary_calendar {
+                            let (first, second) = if a.start_time <= b.start_time {
+                                (a, b)
+                            } else {
+                                (b, a)
+                            };
+                            let first_label = Self::format_situation_event_label(first, &tz);
+                            let second_label = Self::format_situation_event_label(second, &tz);
+                            situations.push(format!(
+                                "TIGHT: {} then {} ({} min gap)",
+                                first_label, second_label, gap
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        situations
+    }
+
     /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
     fn build_anthropic_request(
         &self,
@@ -860,14 +982,17 @@ impl SimplifiedDaemonCore {
             "You are Jasper, a {persona}{persona_ref}. \
 You provide a single glanceable insight for {title}'s status bar — like Android's At a Glance widget, but smarter.\n\n\
 Current time: {now} ({phase}).\n\n\
-Your job: Surface the ONE most useful thing {title} needs to know or be reminded of right now. \
-Think about what a thoughtful person who knows their whole life would tap them on the shoulder about.\n\n\
+Your job: Surface the ONE most useful situation {title} needs to know about right now. \
+An insight is NOT just a single event — it could be a conflict between events, a logistics problem, \
+a timing crunch, or a pattern across the schedule that needs attention. \
+Think about what a thoughtful family coordinator who can see everyone's calendars would tap them on the shoulder about.\n\n\
 Prioritize (in rough order):\n\
-1. Things that need action or preparation in the next 1-2 hours\n\
-2. Travel logistics — if an event has travel time, remind them when they need to leave (e.g. \"you should head out in 20 minutes for your 2pm meeting\")\n\
-3. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
-4. Scheduling conflicts or logistical issues they haven't noticed\n\
-5. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\n\
+1. Logistics conflicts — two family members need to be in different places at the same time, or {title} is double-booked\n\
+2. Tight timing — back-to-back events that leave no margin, especially with travel time\n\
+3. Things that need action or preparation in the next 1-2 hours\n\
+4. Travel logistics — if an event has travel time, remind them when they need to leave (e.g. \"you should head out in 20 minutes for your 2pm meeting\")\n\
+5. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
+6. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\n\
 Do NOT:\n\
 - Simply restate a calendar entry (\"You have a meeting at 3pm\") — add value beyond what a calendar shows\n\
 - Focus on weather unless it meaningfully impacts plans or activities\n\
@@ -876,7 +1001,9 @@ Do NOT:\n\
 - Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\
 - NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\
 - NEVER assume {title} is involved in events from shared calendars — those are shown for awareness only. Never say \"you were briefed on\" or \"your call with\" for shared events. Frame as: \"Christen has a call at 3pm\" not \"you have a call at 3pm\"\n\
-- Don't mention travel time if it's trivially short (under 5 minutes) — only surface it when it's actionable\n\n\
+- Don't mention travel time if it's trivially short (under 5 minutes) — only surface it when it's actionable\n\
+- Don't focus on a single event in isolation when there's a more interesting relationship between events \
+(e.g. don't just say \"Kieran has soccer at 6\" when the real insight is that two kids have overlapping events at different locations)\n\n\
 Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\
 Start your response with a single emoji that captures the mood or topic (e.g. ☕ for morning routines, ⏰ for time-sensitive items, 🌧️ for weather impacts, 📋 for tasks). Vary it — don't reuse the same emoji back-to-back.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
@@ -968,6 +1095,19 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                 provide a genuine observation about having a clear schedule."
                     .to_string(),
             );
+        }
+
+        // Pre-computed schedule analysis — surfaces cross-event situations for the AI
+        let situations =
+            Self::detect_schedule_situations(&context.calendar_events, &local_now);
+        if !situations.is_empty() {
+            let mut section = String::from(
+                "\nSchedule situations (cross-calendar analysis — prioritize these):",
+            );
+            for sit in &situations {
+                section.push_str(&format!("\n- {}", sit));
+            }
+            context_parts.push(section);
         }
 
         // Calendar events with relative times — 3-way partition:
