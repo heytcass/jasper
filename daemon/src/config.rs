@@ -64,6 +64,7 @@ pub struct PersonalityConfig {
 pub struct ContextSourcesConfig {
     pub obsidian: Option<ObsidianConfig>,
     pub weather: Option<WeatherConfig>,
+    pub travel: Option<TravelConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +80,21 @@ pub struct WeatherConfig {
     pub latitude: f64,
     pub longitude: f64,
     pub units: String, // "metric", "imperial"
+    pub cache_duration_minutes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TravelConfig {
+    pub enabled: bool,
+    /// Google Routes API key (prefer SOPS or GOOGLE_ROUTES_API_KEY env var)
+    pub google_api_key: String,
+    /// Home address as plain text (geocoded by the Routes API)
+    pub home_address: String,
+    /// Travel mode: DRIVE, TRANSIT, WALK, BICYCLE
+    pub travel_mode: String,
+    /// Only calculate travel time for events starting within this many hours
+    pub lookahead_hours: u32,
+    /// How long to cache a travel time result (minutes)
     pub cache_duration_minutes: u32,
 }
 
@@ -119,6 +135,14 @@ impl Default for Config {
                     latitude: 42.3314,
                     longitude: -83.0458,
                     units: "imperial".to_string(),
+                    cache_duration_minutes: 30,
+                }),
+                travel: Some(TravelConfig {
+                    enabled: false,
+                    google_api_key: String::new(),
+                    home_address: String::new(),
+                    travel_mode: "DRIVE".to_string(),
+                    lookahead_hours: 12,
                     cache_duration_minutes: 30,
                 }),
             }),
@@ -196,6 +220,17 @@ impl Config {
                     weather_config.google_api_key = weather_api_key.clone();
                     weather_config.enabled = true;
                     debug!("Weather context source enabled with Google Weather API key from SOPS");
+                }
+            }
+        }
+
+        // Override Google Routes API key
+        if let Some(routes_api_key) = secrets.get("services.google_routes_api_key") {
+            debug!("Using Google Routes API key from SOPS");
+            if let Some(ref mut context_sources) = self.context_sources {
+                if let Some(ref mut travel_config) = context_sources.travel {
+                    travel_config.google_api_key = routes_api_key.clone();
+                    debug!("Travel API key set from SOPS");
                 }
             }
         }
@@ -298,6 +333,16 @@ impl Config {
                         debug!("Using Google Weather API key from GOOGLE_WEATHER_API_KEY env var");
                         weather_config.google_api_key = key;
                         weather_config.enabled = true;
+                    }
+                }
+            }
+
+            // Google Routes API key
+            if let Some(ref mut travel_config) = context_sources.travel {
+                if travel_config.google_api_key.is_empty() {
+                    if let Ok(key) = std::env::var("GOOGLE_ROUTES_API_KEY") {
+                        debug!("Using Google Routes API key from GOOGLE_ROUTES_API_KEY env var");
+                        travel_config.google_api_key = key;
                     }
                 }
             }
@@ -643,6 +688,11 @@ impl Config {
                     enabled_sources += 1;
                 }
             }
+            if let Some(ref travel) = sources.travel {
+                if travel.enabled {
+                    enabled_sources += 1;
+                }
+            }
 
             if enabled_sources == 0 {
                 warn!(
@@ -697,11 +747,17 @@ impl Config {
         self.context_sources.as_ref()?.weather.as_ref()
     }
 
+    /// Get Travel configuration
+    pub fn get_travel_config(&self) -> Option<&TravelConfig> {
+        self.context_sources.as_ref()?.travel.as_ref()
+    }
+
     /// Check if a context source is enabled
     pub fn is_context_source_enabled(&self, source_id: &str) -> bool {
         match source_id {
             "obsidian" => self.get_obsidian_config().is_some_and(|c| c.enabled),
             "weather" => self.get_weather_config().is_some_and(|c| c.enabled),
+            "travel" => self.get_travel_config().is_some_and(|c| c.enabled),
             "calendar" => true, // Always enabled
             _ => false,
         }

@@ -16,12 +16,14 @@ mod new_dbus_service;
 mod noctalia_adapter;
 mod significance_engine;
 mod sops_integration;
+mod travel;
 mod waybar_adapter;
 
 use api_manager::ApiManager;
 use config::Config;
 use context_sources::weather::WeatherContextSource;
 use context_sources::ContextSourceManager;
+use travel::TravelTimeService;
 use database::DatabaseInner;
 use google_calendar::GoogleCalendarService;
 use new_daemon_core::SimplifiedDaemonCore;
@@ -156,6 +158,21 @@ async fn start_daemon() -> Result<()> {
         })
     };
 
+    // Initialize travel time service if configured
+    let travel_service = {
+        let config = config_arc.read();
+        config
+            .get_travel_config()
+            .filter(|tc| tc.enabled && !tc.google_api_key.is_empty() && !tc.home_address.is_empty())
+            .map(|tc| {
+                info!(
+                    "Travel time service initialized (mode: {}, from: {})",
+                    tc.travel_mode, tc.home_address
+                );
+                TravelTimeService::new(tc)
+            })
+    };
+
     // Initialize API manager
     let api_manager = ApiManager::new();
 
@@ -166,6 +183,7 @@ async fn start_daemon() -> Result<()> {
         api_manager,
         config_arc,
         calendar_service,
+        travel_service,
     )));
 
     info!("Simplified daemon core created");

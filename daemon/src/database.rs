@@ -224,6 +224,13 @@ impl DatabaseInner {
         conn.execute("ALTER TABLE calendars ADD COLUMN access_role TEXT", [])
             .ok(); // Ignore error if column already exists
 
+        // Add is_primary column to calendars (distinguishes user's main calendar from other owned calendars)
+        conn.execute(
+            "ALTER TABLE calendars ADD COLUMN is_primary INTEGER DEFAULT 0",
+            [],
+        )
+        .ok(); // Ignore error if column already exists
+
         // Create indexes for events table to optimize time-based queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_start_time ON events(start_time)",
@@ -484,12 +491,12 @@ impl DatabaseInner {
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> JasperResult<Vec<(Event, String, Option<String>)>> {
+    ) -> JasperResult<Vec<(Event, String, Option<String>, bool)>> {
         self.with_connection_retry(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT e.id, e.source_id, e.calendar_id, e.title, e.description, e.start_time, e.end_time,
                         e.location, e.event_type, e.participants, e.raw_data_json, e.is_all_day,
-                        c.calendar_name, c.access_role
+                        c.calendar_name, c.access_role, c.is_primary
                  FROM events e
                  LEFT JOIN calendars c ON e.calendar_id = c.id
                  WHERE e.start_time >= ? AND e.start_time <= ?
@@ -516,7 +523,8 @@ impl DatabaseInner {
                     let calendar_name: String = row.get::<_, Option<String>>(12)?
                         .unwrap_or_else(|| "Unknown".to_string());
                     let access_role: Option<String> = row.get(13)?;
-                    Ok((event, calendar_name, access_role))
+                    let is_primary: bool = row.get::<_, Option<i32>>(14)?.map(|v| v != 0).unwrap_or(false);
+                    Ok((event, calendar_name, access_role, is_primary))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -600,6 +608,7 @@ impl DatabaseInner {
         calendar_name: &str,
         calendar_type: Option<&str>,
         access_role: Option<&str>,
+        is_primary: bool,
     ) -> JasperResult<i64> {
         let conn = self.connection.lock();
 
@@ -618,16 +627,16 @@ impl DatabaseInner {
         if let Some(id) = existing_id {
             // Update existing calendar
             conn.execute(
-                "UPDATE calendars SET calendar_name = ?, calendar_type = ?, access_role = ? WHERE id = ?",
-                params![calendar_name, calendar_type, access_role, id],
+                "UPDATE calendars SET calendar_name = ?, calendar_type = ?, access_role = ?, is_primary = ? WHERE id = ?",
+                params![calendar_name, calendar_type, access_role, is_primary, id],
             )?;
             Ok(id)
         } else {
             // Create new calendar
             conn.execute(
-                "INSERT INTO calendars (account_id, calendar_id, calendar_name, calendar_type, color, access_role)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                params![account_id, calendar_id, calendar_name, calendar_type, Self::infer_calendar_color(calendar_id), access_role]
+                "INSERT INTO calendars (account_id, calendar_id, calendar_name, calendar_type, color, access_role, is_primary)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![account_id, calendar_id, calendar_name, calendar_type, Self::infer_calendar_color(calendar_id), access_role, is_primary]
             )?;
             Ok(conn.last_insert_rowid())
         }

@@ -33,6 +33,40 @@ pub struct CalendarEventSummary {
     pub calendar_name: Option<String>,
     /// True if access_role == "owner" — this is the user's own calendar
     pub is_own_calendar: bool,
+    /// True if this is the user's primary (personal) calendar, not just any owned calendar
+    pub is_primary_calendar: bool,
+    /// Travel time from home to this event's location (enriched post-hashing, always None during hash)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub travel_time: Option<TravelTimeInfo>,
+}
+
+/// Travel time information attached to a calendar event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TravelTimeInfo {
+    pub duration_minutes: i32,
+    /// Traffic-aware duration (DRIVE mode only)
+    pub duration_in_traffic_minutes: Option<i32>,
+    pub distance_km: f32,
+    /// "home" for now; future: previous event title for chaining
+    pub origin_label: String,
+    /// Human-readable mode label: "drive", "transit", "walk", "bike ride"
+    pub travel_mode_label: String,
+}
+
+// Manual PartialEq and Hash impls so travel_time doesn't affect significance detection
+impl PartialEq for TravelTimeInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.duration_minutes == other.duration_minutes
+            && self.origin_label == other.origin_label
+    }
+}
+
+impl std::hash::Hash for TravelTimeInfo {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.duration_minutes.hash(state);
+        self.origin_label.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
@@ -336,6 +370,8 @@ mod tests {
                 is_all_day: false,
                 calendar_name: None,
                 is_own_calendar: true,
+                is_primary_calendar: true,
+                travel_time: None,
             }],
             weather: None,
             tasks: vec![],
@@ -368,6 +404,8 @@ mod tests {
             is_all_day: false,
             calendar_name: None,
             is_own_calendar: true,
+            is_primary_calendar: true,
+            travel_time: None,
         };
 
         let snapshot1 = ContextSnapshot {

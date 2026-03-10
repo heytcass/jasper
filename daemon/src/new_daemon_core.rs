@@ -7,7 +7,9 @@ use crate::google_calendar::GoogleCalendarService;
 use crate::new_dbus_service::DbusSignalEmitter;
 use crate::significance_engine::{
     ContextSnapshot as ContextSnapshotSummary, SignificanceEngine, SignificantChange,
+    TravelTimeInfo,
 };
+use crate::travel::TravelTimeService;
 
 use chrono::{DateTime, Timelike, Utc};
 use parking_lot::RwLock;
@@ -69,6 +71,9 @@ pub struct SimplifiedDaemonCore {
 
     // Cached personal context file: (file_mtime, contents)
     personal_context_cache: Arc<RwLock<Option<(SystemTime, String)>>>,
+
+    // Travel time enrichment service (None if not configured)
+    travel_service: Option<TravelTimeService>,
 }
 
 impl SimplifiedDaemonCore {
@@ -78,6 +83,7 @@ impl SimplifiedDaemonCore {
         api_manager: ApiManager,
         config: Arc<parking_lot::RwLock<Config>>,
         calendar_service: Option<GoogleCalendarService>,
+        travel_service: Option<TravelTimeService>,
     ) -> Self {
         let calendar_sync_interval = {
             let cfg = config.read();
@@ -104,6 +110,7 @@ impl SimplifiedDaemonCore {
             signal_emitter: Arc::new(tokio::sync::RwLock::new(None)),
             auth_warning_emitted: Arc::new(RwLock::new(false)),
             personal_context_cache: Arc::new(RwLock::new(None)),
+            travel_service,
         }
     }
 
@@ -296,17 +303,18 @@ impl SimplifiedDaemonCore {
 
                 for (google_calendar_id, events) in &events_by_calendar {
                     // Look up display name and access role from metadata
-                    let (calendar_name, access_role) =
+                    let (calendar_name, access_role, is_primary) =
                         if let Some(meta) = calendar_metadata.get(google_calendar_id) {
-                            (meta.display_name.clone(), Some(meta.access_role.as_str()))
+                            (meta.display_name.clone(), Some(meta.access_role.as_str()), meta.is_primary)
                         } else {
-                            (google_calendar_id.clone(), None)
+                            (google_calendar_id.clone(), None, false)
                         };
                     let db_calendar_id = match self.database.create_or_update_calendar(
                         google_calendar_id,
                         &calendar_name,
                         Some("google_calendar"),
                         access_role,
+                        is_primary,
                     ) {
                         Ok(id) => id,
                         Err(e) => {
@@ -390,12 +398,33 @@ impl SimplifiedDaemonCore {
         debug!("Checking context for significant changes");
 
         // Collect current context from all sources
-        let current_context = self.collect_current_context().await?;
+        let mut current_context = self.collect_current_context().await?;
 
         // Determine trigger: context change or heartbeat
         let (is_significant, changes) = self
             .significance_engine
             .analyze_context(current_context.clone());
+
+        // Enrich calendar events with travel times (after significance check so
+        // traffic fluctuations don't trigger unnecessary AI calls)
+        if let Some(ref travel_service) = self.travel_service {
+            let travel_times = travel_service
+                .get_travel_times_for_events(&current_context.calendar_events)
+                .await;
+            for event in &mut current_context.calendar_events {
+                if let Some(tt) = travel_times.get(&event.id) {
+                    event.travel_time = Some(TravelTimeInfo {
+                        duration_minutes: (tt.duration_seconds / 60) as i32,
+                        duration_in_traffic_minutes: tt
+                            .duration_in_traffic_seconds
+                            .map(|s| (s / 60) as i32),
+                        distance_km: tt.distance_meters as f32 / 1000.0,
+                        origin_label: "home".to_string(),
+                        travel_mode_label: travel_service.travel_mode_label().to_string(),
+                    });
+                }
+            }
+        }
 
         let trigger = if is_significant {
             info!("Significant changes detected: {:?}", changes);
@@ -488,7 +517,7 @@ impl SimplifiedDaemonCore {
             .database
             .get_events_in_range_with_calendar(lookback_start, end_time)?
             .into_iter()
-            .map(|(event, calendar_name, access_role)| {
+            .map(|(event, calendar_name, access_role, is_primary)| {
                 let is_own = access_role.as_deref() == Some("owner");
                 crate::significance_engine::CalendarEventSummary {
                     id: event.source_id,
@@ -501,6 +530,8 @@ impl SimplifiedDaemonCore {
                     is_all_day: event.is_all_day.unwrap_or(false),
                     calendar_name: Some(calendar_name),
                     is_own_calendar: is_own,
+                    is_primary_calendar: is_primary,
+                    travel_time: None,
                 }
             })
             .collect();
@@ -762,6 +793,29 @@ impl SimplifiedDaemonCore {
         }
     }
 
+    /// Format travel time info for inclusion in the AI prompt
+    fn format_travel_time(travel: &Option<TravelTimeInfo>) -> String {
+        let Some(tt) = travel else {
+            return String::new();
+        };
+
+        let base = format!(
+            "{} min {} from {}",
+            tt.duration_minutes, tt.travel_mode_label, tt.origin_label
+        );
+
+        if let Some(traffic_min) = tt.duration_in_traffic_minutes {
+            // Only mention traffic if it adds 5+ minutes over base
+            if traffic_min > tt.duration_minutes + 5 {
+                format!(" ({}, ~{} min in current traffic)", base, traffic_min)
+            } else {
+                format!(" ({})", base)
+            }
+        } else {
+            format!(" ({})", base)
+        }
+    }
+
     /// Build the Anthropic API request body from context (no I/O, can be reused for retries)
     fn build_anthropic_request(
         &self,
@@ -810,9 +864,10 @@ Your job: Surface the ONE most useful thing {title} needs to know or be reminded
 Think about what a thoughtful person who knows their whole life would tap them on the shoulder about.\n\n\
 Prioritize (in rough order):\n\
 1. Things that need action or preparation in the next 1-2 hours\n\
-2. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
-3. Scheduling conflicts or logistical issues they haven't noticed\n\
-4. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\n\
+2. Travel logistics — if an event has travel time, remind them when they need to leave (e.g. \"you should head out in 20 minutes for your 2pm meeting\")\n\
+3. Tasks or deadlines that are creeping up and easy to forget (the kind assigned weeks ago that slip through the cracks)\n\
+4. Scheduling conflicts or logistical issues they haven't noticed\n\
+5. Cross-domain connections (a task relates to an upcoming event, weather affects plans)\n\n\
 Do NOT:\n\
 - Simply restate a calendar entry (\"You have a meeting at 3pm\") — add value beyond what a calendar shows\n\
 - Focus on weather unless it meaningfully impacts plans or activities\n\
@@ -820,7 +875,8 @@ Do NOT:\n\
 - Be robotic or generic — write like someone who knows {title} personally, with warmth\n\
 - Use any name or title other than \"{title}\" when addressing the user — always call them \"{title}\", never \"Sir\", \"Ma'am\", or any other title\n\
 - NEVER invent, fabricate, or assume events, tasks, or appointments that are not listed in the context below — if the schedule is empty, it's empty\n\
-- NEVER assume {title} is involved in events from shared calendars — those are shown for awareness only. Never say \"you were briefed on\" or \"your call with\" for shared events. Frame as: \"Christen has a call at 3pm\" not \"you have a call at 3pm\"\n\n\
+- NEVER assume {title} is involved in events from shared calendars — those are shown for awareness only. Never say \"you were briefed on\" or \"your call with\" for shared events. Frame as: \"Christen has a call at 3pm\" not \"you have a call at 3pm\"\n\
+- Don't mention travel time if it's trivially short (under 5 minutes) — only surface it when it's actionable\n\n\
 Tone: {formality}. Keep it to ONE concise sentence. Warm and familiar, not stiff.\n\
 Start your response with a single emoji that captures the mood or topic (e.g. ☕ for morning routines, ⏰ for time-sensitive items, 🌧️ for weather impacts, 📋 for tasks). Vary it — don't reuse the same emoji back-to-back.\n\n\
 Recent insights (DO NOT repeat these):\n{recent_insights}",
@@ -914,17 +970,32 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
             );
         }
 
-        // Calendar events with relative times — partitioned by ownership
+        // Calendar events with relative times — 3-way partition:
+        // 1. Primary calendar (user's personal events) → "Your calendar"
+        // 2. Owned non-primary calendars (family calendars user created) → grouped by calendar name
+        // 3. Shared calendars (reader/writer access) → "Shared calendar — X (awareness only)"
         if !context.calendar_events.is_empty() {
-            let (own_events, shared_events): (Vec<_>, Vec<_>) = context
-                .calendar_events
-                .iter()
-                .partition(|e| e.is_own_calendar);
+            let mut primary_events = Vec::new();
+            let mut owned_non_primary: BTreeMap<&str, Vec<&crate::significance_engine::CalendarEventSummary>> = BTreeMap::new();
+            let mut shared_events: BTreeMap<&str, Vec<&crate::significance_engine::CalendarEventSummary>> = BTreeMap::new();
 
-            // Own calendar events
-            if !own_events.is_empty() {
+            for event in &context.calendar_events {
+                if event.is_primary_calendar {
+                    primary_events.push(event);
+                } else if event.is_own_calendar {
+                    // Owned but not primary — family calendars like "Kieran Thomas", "House"
+                    let name = event.calendar_name.as_deref().unwrap_or("Other");
+                    owned_non_primary.entry(name).or_default().push(event);
+                } else {
+                    let name = event.calendar_name.as_deref().unwrap_or("Shared");
+                    shared_events.entry(name).or_default().push(event);
+                }
+            }
+
+            // 1. Primary calendar events
+            if !primary_events.is_empty() {
                 let mut cal_section = String::from("\nYour calendar (next 24h):");
-                for event in &own_events {
+                for event in &primary_events {
                     let timing = if event.is_all_day {
                         "all day".to_string()
                     } else {
@@ -935,44 +1006,59 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                         .as_ref()
                         .map(|l| format!(", at {}", l))
                         .unwrap_or_default();
-                    cal_section
-                        .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
+                    let travel = Self::format_travel_time(&event.travel_time);
+                    cal_section.push_str(&format!(
+                        "\n- \"{}\" — {}{}{}",
+                        event.title, timing, location, travel
+                    ));
                 }
                 context_parts.push(cal_section);
             }
 
-            // Shared calendar events, grouped by calendar name
-            if !shared_events.is_empty() {
-                let mut by_calendar: BTreeMap<
-                    &str,
-                    Vec<&&crate::significance_engine::CalendarEventSummary>,
-                > = BTreeMap::new();
-                for event in &shared_events {
-                    let name = event.calendar_name.as_deref().unwrap_or("Shared");
-                    by_calendar.entry(name).or_default().push(event);
+            // 2. Owned non-primary calendars, grouped by calendar name
+            for (cal_name, events) in &owned_non_primary {
+                let mut section = format!("\n{} calendar:", cal_name);
+                for event in events {
+                    let timing = if event.is_all_day {
+                        "all day".to_string()
+                    } else {
+                        Self::format_relative_time(&local_now, &event.start_time)
+                    };
+                    let location = event
+                        .location
+                        .as_ref()
+                        .map(|l| format!(", at {}", l))
+                        .unwrap_or_default();
+                    let travel = Self::format_travel_time(&event.travel_time);
+                    section.push_str(&format!(
+                        "\n- \"{}\" — {}{}{}",
+                        event.title, timing, location, travel
+                    ));
                 }
+                context_parts.push(section);
+            }
 
-                for (cal_name, events) in &by_calendar {
-                    let mut section = format!(
-                        "\nShared calendar — {} (awareness only, NOT {}'s events):",
-                        cal_name, personality.user_title,
-                    );
-                    for event in events {
-                        let timing = if event.is_all_day {
-                            "all day".to_string()
-                        } else {
-                            Self::format_relative_time(&local_now, &event.start_time)
-                        };
-                        let location = event
-                            .location
-                            .as_ref()
-                            .map(|l| format!(", at {}", l))
-                            .unwrap_or_default();
-                        section
-                            .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
-                    }
-                    context_parts.push(section);
+            // 3. Shared calendar events, grouped by calendar name
+            for (cal_name, events) in &shared_events {
+                let mut section = format!(
+                    "\nShared calendar — {} (awareness only, NOT {}'s events):",
+                    cal_name, personality.user_title,
+                );
+                for event in events {
+                    let timing = if event.is_all_day {
+                        "all day".to_string()
+                    } else {
+                        Self::format_relative_time(&local_now, &event.start_time)
+                    };
+                    let location = event
+                        .location
+                        .as_ref()
+                        .map(|l| format!(", at {}", l))
+                        .unwrap_or_default();
+                    section
+                        .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
                 }
+                context_parts.push(section);
             }
         }
 
