@@ -1017,7 +1017,10 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
 
             // 2. Owned non-primary calendars, grouped by calendar name
             for (cal_name, events) in &owned_non_primary {
-                let mut section = format!("\n{} calendar:", cal_name);
+                let mut section = format!(
+                    "\n{} calendar (these are {}'s events, NOT {}'s own):",
+                    cal_name, cal_name, personality.user_title
+                );
                 for event in events {
                     let timing = if event.is_all_day {
                         "all day".to_string()
@@ -1153,6 +1156,7 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         }
 
         let user_message = context_parts.join("\n");
+        debug!("AI prompt user message:\n{}", user_message);
 
         let model = self.config.read().ai.model.clone();
 
