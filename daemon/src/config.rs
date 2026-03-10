@@ -76,10 +76,13 @@ pub struct ObsidianConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherConfig {
     pub enabled: bool,
+    #[serde(default)]
     pub google_api_key: String,
     pub latitude: f64,
     pub longitude: f64,
+    #[serde(default = "default_units")]
     pub units: String, // "metric", "imperial"
+    #[serde(default = "default_cache_duration")]
     pub cache_duration_minutes: u32,
 }
 
@@ -87,15 +90,33 @@ pub struct WeatherConfig {
 pub struct TravelConfig {
     pub enabled: bool,
     /// Google Routes API key (prefer SOPS or GOOGLE_ROUTES_API_KEY env var)
+    #[serde(default)]
     pub google_api_key: String,
     /// Home address as plain text (geocoded by the Routes API)
+    #[serde(default)]
     pub home_address: String,
     /// Travel mode: DRIVE, TRANSIT, WALK, BICYCLE
+    #[serde(default = "default_travel_mode")]
     pub travel_mode: String,
     /// Only calculate travel time for events starting within this many hours
+    #[serde(default = "default_lookahead_hours")]
     pub lookahead_hours: u32,
     /// How long to cache a travel time result (minutes)
+    #[serde(default = "default_cache_duration")]
     pub cache_duration_minutes: u32,
+}
+
+fn default_units() -> String {
+    "imperial".to_string()
+}
+fn default_travel_mode() -> String {
+    "DRIVE".to_string()
+}
+fn default_lookahead_hours() -> u32 {
+    12
+}
+fn default_cache_duration() -> u32 {
+    30
 }
 
 impl Default for Config {
