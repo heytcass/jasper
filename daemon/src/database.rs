@@ -857,11 +857,13 @@ impl DatabaseInner {
         })
     }
 
-    /// Clean up expired frontends (no heartbeat for > 60 seconds)
+    /// Clean up expired frontends (no heartbeat for > 120 seconds).
+    /// The timeout must comfortably exceed the poll interval (30s) plus
+    /// the daemon check interval (60s) to avoid race-condition expiry.
     pub fn cleanup_expired_frontends(&self) -> JasperResult<usize> {
         self.with_connection_retry(|conn| {
             let count = conn.execute(
-                "DELETE FROM active_frontends WHERE last_heartbeat < strftime('%s', 'now') - 60",
+                "DELETE FROM active_frontends WHERE last_heartbeat < strftime('%s', 'now') - 120",
                 [],
             )?;
             Ok(count)

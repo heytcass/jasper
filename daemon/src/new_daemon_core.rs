@@ -159,9 +159,11 @@ impl SimplifiedDaemonCore {
 
         info!("Starting simplified daemon core");
 
-        // Give initial grace period for frontends to connect
+        // Give initial grace period for frontends to connect.
+        // Must be longer than the Noctalia plugin poll interval (30s)
+        // so the plugin has time to register via D-Bus.
         info!("Waiting for frontends to connect...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(45)).await;
 
         // Get check interval from daemon (briefly acquire lock)
         let check_interval = daemon.read().await.check_interval;
