@@ -674,16 +674,15 @@ impl SimplifiedDaemonCore {
         let path = {
             let cfg = self.config.read();
             if let Some(ref explicit) = cfg.general.personal_context_file {
-                let expanded = if explicit.starts_with("~/") {
+                if let Some(stripped) = explicit.strip_prefix("~/") {
                     if let Some(home) = dirs::home_dir() {
-                        home.join(&explicit[2..])
+                        home.join(stripped)
                     } else {
                         std::path::PathBuf::from(explicit)
                     }
                 } else {
                     std::path::PathBuf::from(explicit)
-                };
-                expanded
+                }
             } else {
                 Config::get_personal_context_path()?
             }
@@ -926,7 +925,7 @@ impl SimplifiedDaemonCore {
                         continue;
                     };
 
-                    if gap >= 0 && gap <= 15 {
+                    if (0..=15).contains(&gap) {
                         // Only flag tight timing when the user's primary calendar is involved
                         if a.is_primary_calendar || b.is_primary_calendar {
                             let (first, second) = if a.start_time <= b.start_time {

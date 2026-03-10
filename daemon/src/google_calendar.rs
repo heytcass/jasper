@@ -127,10 +127,7 @@ impl GoogleCalendarService {
 
     /// Check if we have valid authentication (attempts token refresh if expired)
     pub async fn is_authenticated(&self) -> bool {
-        match self.get_valid_token().await {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        self.get_valid_token().await.is_ok()
     }
 
     /// Get OAuth2 authorization URL for initial setup

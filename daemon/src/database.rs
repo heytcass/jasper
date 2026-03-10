@@ -487,6 +487,7 @@ impl DatabaseInner {
 
     /// Get events in range with calendar metadata (name + access_role).
     /// Returns (Event, calendar_name, Option<access_role>) tuples.
+    #[allow(clippy::type_complexity)]
     pub fn get_events_in_range_with_calendar(
         &self,
         start: DateTime<Utc>,
