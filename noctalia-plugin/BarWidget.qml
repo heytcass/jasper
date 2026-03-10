@@ -38,8 +38,13 @@ Item {
     // Last-updated timestamp from Main.qml
     readonly property real lastUpdated: jasper?.lastUpdatedAt ?? 0
 
+    // Tick counter incremented by timer — forces time-dependent bindings to re-evaluate
+    property int _tick: 0
+    Timer { interval: 30000; running: true; repeat: true; onTriggered: root._tick++ }
+
     // Tooltip — brief status label, not the insight (insight lives in the panel)
     readonly property string tooltipContent: {
+        void root._tick; // depend on tick to re-evaluate periodically
         if (refreshing)
             return "Jasper \u{00B7} Refreshing\u{2026}";
         if (state === "active" && lastUpdated > 0) {

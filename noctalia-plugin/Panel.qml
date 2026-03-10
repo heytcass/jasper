@@ -24,8 +24,13 @@ Item {
     readonly property bool   refreshing:   jasper?.isRefreshing   ?? false
     readonly property real   lastUpdated:  jasper?.lastUpdatedAt  ?? 0
 
+    // Tick counter incremented by timer — forces time-dependent bindings to re-evaluate
+    property int _tick: 0
+    Timer { interval: 30000; running: true; repeat: true; onTriggered: root._tick++ }
+
     // Relative time string for footer
     readonly property string agoText: {
+        void root._tick; // depend on tick to re-evaluate periodically
         if (root.lastUpdated <= 0) return "";
         var ago = Math.floor((Date.now() - root.lastUpdated) / 60000);
         if (ago < 1) return "Just now";
