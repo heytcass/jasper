@@ -224,13 +224,16 @@ impl Config {
             }
         }
 
-        // Override Google Routes API key
-        if let Some(routes_api_key) = secrets.get("services.google_routes_api_key") {
-            debug!("Using Google Routes API key from SOPS");
-            if let Some(ref mut context_sources) = self.context_sources {
-                if let Some(ref mut travel_config) = context_sources.travel {
+        // Override Google Routes API key and home address
+        if let Some(ref mut context_sources) = self.context_sources {
+            if let Some(ref mut travel_config) = context_sources.travel {
+                if let Some(routes_api_key) = secrets.get("services.google_routes_api_key") {
+                    debug!("Using Google Routes API key from SOPS");
                     travel_config.google_api_key = routes_api_key.clone();
-                    debug!("Travel API key set from SOPS");
+                }
+                if let Some(home_addr) = secrets.get("services.jasper_home_address") {
+                    debug!("Using home address from SOPS");
+                    travel_config.home_address = home_addr.clone();
                 }
             }
         }
@@ -337,12 +340,18 @@ impl Config {
                 }
             }
 
-            // Google Routes API key
+            // Google Routes API key + home address
             if let Some(ref mut travel_config) = context_sources.travel {
                 if travel_config.google_api_key.is_empty() {
                     if let Ok(key) = std::env::var("GOOGLE_ROUTES_API_KEY") {
                         debug!("Using Google Routes API key from GOOGLE_ROUTES_API_KEY env var");
                         travel_config.google_api_key = key;
+                    }
+                }
+                if travel_config.home_address.is_empty() {
+                    if let Ok(addr) = std::env::var("HOME_ADDRESS") {
+                        debug!("Using home address from HOME_ADDRESS env var");
+                        travel_config.home_address = addr;
                     }
                 }
             }
