@@ -87,8 +87,7 @@ impl TravelTimeService {
         }
 
         let now = Utc::now();
-        let lookahead_cutoff =
-            now + chrono::Duration::hours(self.lookahead_hours as i64);
+        let lookahead_cutoff = now + chrono::Duration::hours(self.lookahead_hours as i64);
 
         // Filter to eligible events
         let eligible: Vec<_> = events
@@ -336,7 +335,9 @@ impl TravelTimeService {
         // Reject strings that are just phone numbers
         let digits_and_phone_chars: String = trimmed
             .chars()
-            .filter(|c| !c.is_ascii_digit() && *c != '-' && *c != '(' && *c != ')' && *c != '+' && *c != ' ')
+            .filter(|c| {
+                !c.is_ascii_digit() && *c != '-' && *c != '(' && *c != ')' && *c != '+' && *c != ' '
+            })
             .collect();
         if digits_and_phone_chars.is_empty() && trimmed.len() >= 7 {
             return false;

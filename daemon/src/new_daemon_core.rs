@@ -305,7 +305,11 @@ impl SimplifiedDaemonCore {
                     // Look up display name and access role from metadata
                     let (calendar_name, access_role, is_primary) =
                         if let Some(meta) = calendar_metadata.get(google_calendar_id) {
-                            (meta.display_name.clone(), Some(meta.access_role.as_str()), meta.is_primary)
+                            (
+                                meta.display_name.clone(),
+                                Some(meta.access_role.as_str()),
+                                meta.is_primary,
+                            )
                         } else {
                             (google_calendar_id.clone(), None, false)
                         };
@@ -703,7 +707,11 @@ impl SimplifiedDaemonCore {
             Ok(content) if !content.trim().is_empty() => {
                 let trimmed = content.trim().to_string();
                 *self.personal_context_cache.write() = Some((mtime, trimmed.clone()));
-                info!("Loaded personal context from {:?} ({} bytes)", path, trimmed.len());
+                info!(
+                    "Loaded personal context from {:?} ({} bytes)",
+                    path,
+                    trimmed.len()
+                );
                 Some(trimmed)
             }
             _ => None,
@@ -849,7 +857,10 @@ impl SimplifiedDaemonCore {
             .map(|l| format!(", at {}", l))
             .unwrap_or_default();
 
-        format!("\"{}{}\" ({}{})", cal_prefix, event.title, time_range, location)
+        format!(
+            "\"{}{}\" ({}{})",
+            cal_prefix, event.title, time_range, location
+        )
     }
 
     /// Detect cross-event schedule situations worth surfacing to the AI.
@@ -1098,12 +1109,10 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         }
 
         // Pre-computed schedule analysis — surfaces cross-event situations for the AI
-        let situations =
-            Self::detect_schedule_situations(&context.calendar_events, &local_now);
+        let situations = Self::detect_schedule_situations(&context.calendar_events, &local_now);
         if !situations.is_empty() {
-            let mut section = String::from(
-                "\nSchedule situations (cross-calendar analysis — prioritize these):",
-            );
+            let mut section =
+                String::from("\nSchedule situations (cross-calendar analysis — prioritize these):");
             for sit in &situations {
                 section.push_str(&format!("\n- {}", sit));
             }
@@ -1116,8 +1125,14 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
         // 3. Shared calendars (reader/writer access) → "Shared calendar — X (awareness only)"
         if !context.calendar_events.is_empty() {
             let mut primary_events = Vec::new();
-            let mut owned_non_primary: BTreeMap<&str, Vec<&crate::significance_engine::CalendarEventSummary>> = BTreeMap::new();
-            let mut shared_events: BTreeMap<&str, Vec<&crate::significance_engine::CalendarEventSummary>> = BTreeMap::new();
+            let mut owned_non_primary: BTreeMap<
+                &str,
+                Vec<&crate::significance_engine::CalendarEventSummary>,
+            > = BTreeMap::new();
+            let mut shared_events: BTreeMap<
+                &str,
+                Vec<&crate::significance_engine::CalendarEventSummary>,
+            > = BTreeMap::new();
 
             for event in &context.calendar_events {
                 if event.is_primary_calendar {
@@ -1198,8 +1213,7 @@ Recent insights (DO NOT repeat these):\n{recent_insights}",
                         .as_ref()
                         .map(|l| format!(", at {}", l))
                         .unwrap_or_default();
-                    section
-                        .push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
+                    section.push_str(&format!("\n- \"{}\" — {}{}", event.title, timing, location));
                 }
                 context_parts.push(section);
             }

@@ -57,8 +57,7 @@ pub struct TravelTimeInfo {
 // Manual PartialEq and Hash impls so travel_time doesn't affect significance detection
 impl PartialEq for TravelTimeInfo {
     fn eq(&self, other: &Self) -> bool {
-        self.duration_minutes == other.duration_minutes
-            && self.origin_label == other.origin_label
+        self.duration_minutes == other.duration_minutes && self.origin_label == other.origin_label
     }
 }
 

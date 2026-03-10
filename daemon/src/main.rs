@@ -23,7 +23,6 @@ use api_manager::ApiManager;
 use config::Config;
 use context_sources::weather::WeatherContextSource;
 use context_sources::ContextSourceManager;
-use travel::TravelTimeService;
 use database::DatabaseInner;
 use google_calendar::GoogleCalendarService;
 use new_daemon_core::SimplifiedDaemonCore;
@@ -31,6 +30,7 @@ use new_dbus_service::SimplifiedDbusService;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
+use travel::TravelTimeService;
 
 #[derive(Parser)]
 #[command(name = "jasper-daemon")]
