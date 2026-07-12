@@ -1,5 +1,12 @@
 # Claude Code Instructions for Jasper Development
 
+> **📦 REPO ARCHIVED (2026-07-11) — do not develop the daemon.** Jasper lives
+> on as a ClaudeOS lane (`~/.config/claudeos`, `modules/apps/jasper.nix` +
+> Quickshell island face). New Jasper work happens THERE. Everything below
+> describes the retired Rust daemon's development workflow and is kept only
+> as historical reference for the donor code (`daemon/src/new_daemon_core.rs`
+> prompt/ownership logic, `significance_engine.rs`, `travel.rs`).
+
 ## 🖥️ Platform Detection
 
 **IMPORTANT**: This project supports both NixOS and Ubuntu/Debian systems with different workflows.

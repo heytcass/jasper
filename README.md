@@ -1,5 +1,15 @@
 # Jasper - Personal AI Assistant
 
+> **📦 ARCHIVED (2026-07-11).** This daemon is retired; the repo is preserved as
+> a donor archive. Jasper — the name, the voice, and the doctrine (one
+> glanceable insight, significance-gated thinking, family-calendar ownership
+> awareness) — lives on as a lane inside
+> [claudeos](https://github.com/heytcass/claudeos): dumb collectors + one
+> `claude -p` call + a Quickshell bar face, replacing the standalone Rust
+> daemon, its D-Bus service, and all four frontends. See claudeos
+> `docs/PHILOSOPHY.md` ("On Jasper specifically" — *take the thinking, not the
+> daemon*) and `modules/apps/jasper.nix`.
+
 Jasper is a proactive, intelligent companion for your desktop that leverages Claude Sonnet 4 to analyze your calendar and context data, providing personalized insights through multiple frontend options including a native GNOME Shell extension and Waybar integration.
 
 ## ✨ Features
